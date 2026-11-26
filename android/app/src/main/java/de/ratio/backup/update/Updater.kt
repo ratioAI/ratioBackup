@@ -99,10 +99,19 @@ object Updater {
 /** Zeigt Androids Bestätigung „Installieren?", wenn das System sie verlangt. */
 class InstallReceiver : android.content.BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.getIntExtra(PackageInstaller.EXTRA_STATUS, -999) == PackageInstaller.STATUS_PENDING_USER_ACTION) {
-            @Suppress("DEPRECATION")
-            val confirm = intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT) ?: return
-            context.startActivity(confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        when (val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, -999)) {
+            PackageInstaller.STATUS_PENDING_USER_ACTION -> {
+                @Suppress("DEPRECATION")
+                val confirm = intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT) ?: return
+                context.startActivity(confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            }
+            PackageInstaller.STATUS_SUCCESS -> {}
+            PackageInstaller.STATUS_FAILURE_ABORTED -> {} // vom Nutzer abgebrochen
+            else -> de.ratio.backup.backup.Notifier.warn(
+                context, "Update nicht installiert",
+                "Android meldet: ${intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE) ?: "Fehler $status"}. " +
+                    "Lade die APK notfalls über den Link in der Anleitung neu.",
+            )
         }
     }
 }

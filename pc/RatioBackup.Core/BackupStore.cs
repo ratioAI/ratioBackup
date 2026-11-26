@@ -42,7 +42,7 @@ public sealed class BackupStore
     }
 
     public const int HistoryMax = 100;
-    public static readonly TimeSpan RunTimeout = TimeSpan.FromMinutes(2);
+    public static readonly TimeSpan RunTimeout = TimeSpan.FromMinutes(10);
     private readonly RunState _run = new();
     private volatile IReadOnlyList<RunRecord> _historySnapshot = Array.Empty<RunRecord>();
     private volatile IReadOnlyList<TrashEntry> _trashSnapshot = Array.Empty<TrashEntry>();
@@ -102,13 +102,20 @@ public sealed class BackupStore
     {
         var e = _state.Trash.FirstOrDefault(t => t.Id == id);
         if (e is null) return false;
-        _state.Trash.Remove(e);
         var source = Path.Combine(_trashDir, e.Day, Native(e.Stored));
-        if (!File.Exists(source)) { Save(); Refresh(); return false; }
-        var stored = UniqueStored(e.Stored);
+        if (!File.Exists(source)) { _state.Trash.Remove(e); Save(); Refresh(); return false; }
+        var stored = UniqueStored(e.Stored, avoidDiskFiles: true);
         var target = Path.Combine(_deviceDir, Native(stored));
-        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-        File.Move(source, target);
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Move(source, target);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false; // z. B. Datei gerade geöffnet – Eintrag bleibt im Papierkorb
+        }
+        _state.Trash.Remove(e);
         _state.Kept.Add(new KeptEntry(stored, e.Size));
         Save();
         Refresh();
@@ -121,7 +128,8 @@ public sealed class BackupStore
         var set = ids.ToHashSet();
         foreach (var e in _state.Trash.Where(t => set.Contains(t.Id)).ToList())
         {
-            try { File.Delete(Path.Combine(_trashDir, e.Day, Native(e.Stored))); } catch (IOException) { }
+            try { File.Delete(Path.Combine(_trashDir, e.Day, Native(e.Stored))); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { continue; }
             _state.Trash.Remove(e);
         }
         Save();
@@ -363,13 +371,18 @@ public sealed class BackupStore
         File.Delete(part + ".json");
     }
 
-    private string StoredPathFor(string phonePath) => UniqueStored(PathMapper.ToWindowsRelative(phonePath));
+    private string StoredPathFor(string phonePath) => UniqueStored(PathMapper.ToWindowsRelative(phonePath), avoidDiskFiles: false);
 
     /// <summary>Freier Ablagepfad: belegt durch Index, wiederhergestellte Dateien oder eine Datei auf der Platte → "~2", "~3" …</summary>
-    private string UniqueStored(string rel)
+    /// <remarks>
+    /// Beim Hochladen zählen nur Index und behaltene Dateien als belegt: Eine nicht erfasste Datei auf der Platte ist
+    /// meist ein Upload, dessen Index-Eintrag vor einem Absturz nicht mehr gespeichert wurde – sie wird überschrieben.
+    /// Beim Wiederherstellen wird nichts überschrieben.
+    /// </remarks>
+    private string UniqueStored(string rel, bool avoidDiskFiles)
     {
         var taken = new HashSet<string>(_state.Index.Values.Select(v => v.Stored).Concat(_state.Kept.Select(k => k.Stored)), StringComparer.OrdinalIgnoreCase);
-        bool Free(string c) => !taken.Contains(c) && !File.Exists(Path.Combine(_deviceDir, Native(c)));
+        bool Free(string c) => !taken.Contains(c) && (!avoidDiskFiles || !File.Exists(Path.Combine(_deviceDir, Native(c))));
         if (Free(rel)) return rel;
         var slash = rel.LastIndexOf('\\');
         var dir = slash >= 0 ? rel[..(slash + 1)] : "";
@@ -391,8 +404,16 @@ public sealed class BackupStore
         if (!File.Exists(source)) return;
         var day = _utcNow().ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         var target = Path.Combine(_trashDir, day, Native(e.Stored));
-        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-        File.Move(source, target, overwrite: true);
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Move(source, target, overwrite: true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _state.Index[phonePath] = e; // gesperrt: bleibt im Spiegel, nächster Lauf versucht es erneut
+            return;
+        }
         _state.Trash.RemoveAll(t => t.Day == day && string.Equals(t.Stored, e.Stored, StringComparison.OrdinalIgnoreCase));
         _state.Trash.Add(new TrashEntry(Guid.NewGuid().ToString("N"), phonePath, e.Stored, day, e.Size, _utcNow()));
     }

@@ -53,7 +53,11 @@ jobs:
           echo "RB_VERSION_CODE=$((100 + ${{ github.run_number }}))" >> "$GITHUB_ENV"
           echo "RB_VERSION_NAME=0.${{ github.run_number }}" >> "$GITHUB_ENV"
           # Ohne Schlüssel (Secret fehlt) laufen Tests trotzdem; das Release-Job verlangt aber einen gültigen Schlüssel.
-          [ -f android/keystore/release.jks.enc ] && [ -n "$PW" ] || { echo "kein Schlüssel – APK wird nur zum Testen signiert"; exit 0; }
+          if ! { [ -f android/keystore/release.jks.enc ] && [ -n "$PW" ]; }; then
+            # Auf main nie mit fremdem Schlüssel bauen: das Update ließe sich am Handy nicht installieren.
+            [ "$GITHUB_REF" = "refs/heads/main" ] && { echo "::error::Signaturschlüssel oder KEYSTORE_PASSWORD fehlt"; exit 1; }
+            echo "kein Schlüssel – APK wird nur zum Testen signiert"; exit 0
+          fi
           openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in android/keystore/release.jks.enc -out "$RUNNER_TEMP/release.jks" -pass env:PW
           echo "RB_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
       - uses: actions/setup-java@v4

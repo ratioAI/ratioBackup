@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -229,7 +230,14 @@ public partial class MainWindow : Window
         var leftText = Muted($"noch {Math.Max(0, left)} Tage"); Grid.SetColumn(leftText, 3); g.Children.Add(leftText);
         var btn = new Button { Content = "Wiederherstellen", Height = 30, HorizontalAlignment = HorizontalAlignment.Right };
         btn.SetResourceReference(StyleProperty, "Secondary");
-        btn.Click += (_, _) => { _b.Store?.Restore(e.Id); _selected.Remove(e.Id); RefreshTrash(); };
+        btn.Click += async (_, _) =>
+        {
+            btn.IsEnabled = false;
+            var ok = await Task.Run(() => _b.Store?.Restore(e.Id) ?? false);
+            if (!ok) MessageBox.Show(this, "Die Datei konnte nicht wiederhergestellt werden (evtl. gerade geöffnet). Bitte später erneut versuchen.", "RatioBackup");
+            _selected.Remove(e.Id);
+            RefreshTrash();
+        };
         Grid.SetColumn(btn, 4); g.Children.Add(btn);
         var wrap = new Border { BorderThickness = new Thickness(0, 1, 0, 0), Child = g };
         wrap.SetResourceReference(Border.BorderBrushProperty, "Line");
@@ -238,24 +246,30 @@ public partial class MainWindow : Window
 
     private void TrashSearch_Changed(object sender, TextChangedEventArgs e) => RefreshTrash();
 
-    private void RestoreSelected_Click(object sender, RoutedEventArgs e)
+    // Speicher-Aufrufe laufen im Hintergrund: Während ein großes Video hochlädt, wäre die Ablage sonst blockiert
+    // und das Fenster hinge („Keine Rückmeldung").
+    private async void RestoreSelected_Click(object sender, RoutedEventArgs e)
     {
-        foreach (var id in _selected.ToList()) _b.Store?.Restore(id);
+        var ids = _selected.ToList();
+        RestoreSelected.IsEnabled = false;
+        var failed = await Task.Run(() => ids.Count(id => !(_b.Store?.Restore(id) ?? false)));
         _selected.Clear();
         RefreshTrash();
+        if (failed > 0) MessageBox.Show(this, $"{failed} Dateien konnten nicht wiederhergestellt werden (evtl. gerade geöffnet).", "RatioBackup");
     }
 
     private void DeleteSelected_Click(object sender, RoutedEventArgs e)
     {
         if (MessageBox.Show(this, $"{_selected.Count} Dateien endgültig löschen? Das lässt sich nicht rückgängig machen.", "RatioBackup",
                 MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
-        _b.Store?.DeletePermanently(_selected.ToList());
+        var ids = _selected.ToList();
+        DeleteSelected.IsEnabled = false;
+        _ = Task.Run(() => _b.Store?.DeletePermanently(ids)).ContinueWith(_ => Dispatcher.BeginInvoke(RefreshTrash));
         _selected.Clear();
-        RefreshTrash();
     }
 
-    private void KeepHeld_Click(object sender, RoutedEventArgs e) { _b.Store?.DiscardHeldBackDeletions(); RefreshTrash(); }
-    private void TrashHeld_Click(object sender, RoutedEventArgs e) { _b.Store?.ConfirmHeldBackDeletions(); RefreshTrash(); }
+    private async void KeepHeld_Click(object sender, RoutedEventArgs e) { await Task.Run(() => _b.Store?.DiscardHeldBackDeletions()); RefreshTrash(); }
+    private async void TrashHeld_Click(object sender, RoutedEventArgs e) { await Task.Run(() => _b.Store?.ConfirmHeldBackDeletions()); RefreshTrash(); }
 
     // ---------- Einstellungen ----------
 

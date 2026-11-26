@@ -18,6 +18,13 @@ public partial class App : Application
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+        // Ein Fehler in der Oberfläche darf nie das ganze Programm (und damit die Sicherung) beenden.
+        DispatcherUnhandledException += (_, ex) =>
+        {
+            ex.Handled = true;
+            MessageBox.Show($"Das hat nicht geklappt:\n{ex.Exception.Message}", "RatioBackup", MessageBoxButton.OK, MessageBoxImage.Warning);
+        };
+        SessionEnding += (_, _) => Backend?.Dispose();
         Theme.Apply();
         Theme.Watch();
 
