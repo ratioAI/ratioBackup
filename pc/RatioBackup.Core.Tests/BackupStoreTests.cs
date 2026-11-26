@@ -153,13 +153,13 @@ public sealed class BackupStoreTests : IDisposable
     public async Task MassDeletion_HeldBack()
     {
         var s = NewStore();
-        for (var i = 0; i < 100; i++) await Put(s, $"DCIM/{i}.jpg", Bytes(1));
-        var keep = Enumerable.Range(0, 70).Select(i => ($"DCIM/{i}.jpg", 1L)).ToArray();
+        for (var i = 0; i < 200; i++) await Put(s, $"DCIM/{i}.jpg", Bytes(1));
+        var keep = Enumerable.Range(0, 140).Select(i => ($"DCIM/{i}.jpg", 1L)).ToArray();
         var r = s.ApplyManifest(Manifest(keep));
         Assert.Equal(0, r.Trashed);
-        Assert.Equal(30, r.HeldBackDeletions);
+        Assert.Equal(60, r.HeldBackDeletions);
         Assert.True(s.GetStatus().PendingDeletionReview);
-        Assert.True(File.Exists(Dev(Path.Combine("DCIM", "99.jpg"))));
+        Assert.True(File.Exists(Dev(Path.Combine("DCIM", "199.jpg"))));
     }
 
     [Fact]

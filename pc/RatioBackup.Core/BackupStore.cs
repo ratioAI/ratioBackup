@@ -71,7 +71,7 @@ public sealed class BackupStore
         foreach (var f in onPhone.Values)
         {
             if (_state.Index.TryGetValue(f.Path, out var e) && e.Size == f.Size && e.MtimeMs == f.MtimeMs
-                && File.Exists(Path.Combine(_deviceDir, e.Stored)))
+                && File.Exists(Path.Combine(_deviceDir, Native(e.Stored))))
                 continue;
             needed.Add(new NeededFile(f.Path, PartOffset(f.Path, f.Size, f.MtimeMs)));
         }
@@ -143,7 +143,7 @@ public sealed class BackupStore
             }
 
             var stored = _state.Index.TryGetValue(path, out var existing) ? existing.Stored : StoredPathFor(path);
-            var target = Path.Combine(_deviceDir, stored);
+            var target = Path.Combine(_deviceDir, Native(stored));
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
             File.Move(part, target, overwrite: true);
             File.Delete(part + ".json");
@@ -199,6 +199,9 @@ public sealed class BackupStore
         try { return f(); } finally { _lock.Release(); }
     }
 
+    /// <summary>Index speichert Windows-Pfade ('\\'); für das laufende System umwandeln.</summary>
+    private static string Native(string stored) => stored.Replace('\\', Path.DirectorySeparatorChar);
+
     private static bool UnderRoot(string path, string root) =>
         path.StartsWith(root + "/", StringComparison.Ordinal);
 
@@ -235,12 +238,15 @@ public sealed class BackupStore
         var rel = PathMapper.ToWindowsRelative(phonePath);
         var taken = new HashSet<string>(_state.Index.Values.Select(v => v.Stored), StringComparer.OrdinalIgnoreCase);
         if (!taken.Contains(rel)) return rel;
-        var dir = Path.GetDirectoryName(rel) ?? "";
-        var name = Path.GetFileNameWithoutExtension(rel);
-        var ext = Path.GetExtension(rel);
+        var slash = rel.LastIndexOf('\\');
+        var dir = slash >= 0 ? rel[..(slash + 1)] : "";
+        var file = rel[(slash + 1)..];
+        var dot = file.LastIndexOf('.');
+        var name = dot > 0 ? file[..dot] : file;
+        var ext = dot > 0 ? file[dot..] : "";
         for (var i = 2; ; i++)
         {
-            var candidate = Path.Combine(dir, $"{name}~{i}{ext}");
+            var candidate = $"{dir}{name}~{i}{ext}";
             if (!taken.Contains(candidate)) return candidate;
         }
     }
@@ -248,10 +254,10 @@ public sealed class BackupStore
     private void MoveToTrash(string phonePath)
     {
         if (!_state.Index.Remove(phonePath, out var e)) return;
-        var source = Path.Combine(_deviceDir, e.Stored);
+        var source = Path.Combine(_deviceDir, Native(e.Stored));
         if (!File.Exists(source)) return;
         var day = _utcNow().ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-        var target = Path.Combine(_trashDir, day, e.Stored);
+        var target = Path.Combine(_trashDir, day, Native(e.Stored));
         Directory.CreateDirectory(Path.GetDirectoryName(target)!);
         File.Move(source, target, overwrite: true);
     }
