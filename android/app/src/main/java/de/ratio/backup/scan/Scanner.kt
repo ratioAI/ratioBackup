@@ -11,11 +11,11 @@ data class FileEntry(val path: String, val size: Long, val mtimeMs: Long)
 data class ScanResult(val roots: List<String>, val files: List<FileEntry>)
 
 /** Durchsucht die gesicherten Ordner unter [storageRoot] (normalerweise /storage/emulated/0). */
-class Scanner(private val storageRoot: File) {
+class Scanner(private val storageRoot: File, private val roots: List<String> = PathFilter.ROOTS) {
     fun scan(): ScanResult {
         val roots = mutableListOf<String>()
         val files = mutableListOf<FileEntry>()
-        for (root in PathFilter.ROOTS) {
+        for (root in roots) {
             val dir = File(storageRoot, root)
             // Nur lesbare Wurzeln melden: Der PC löscht ausschließlich innerhalb gemeldeter Wurzeln.
             if (!dir.isDirectory || !dir.canRead() || dir.list() == null) continue

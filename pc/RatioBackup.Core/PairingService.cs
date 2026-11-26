@@ -78,6 +78,9 @@ public sealed class PairingService
         return CryptographicOperations.FixedTimeEquals(Encoding.ASCII.GetBytes(actual), Encoding.ASCII.GetBytes(expected));
     }
 
+    /// <summary>Prüfcode, den PC und Handy beim Koppeln gleich anzeigen.</summary>
+    public static string VerifyCode(string fingerprint) => fingerprint[..Math.Min(4, fingerprint.Length)].ToUpperInvariant();
+
     public static string Proof(string code, string fingerprint) =>
         Convert.ToHexString(HMACSHA256.HashData(Encoding.UTF8.GetBytes(code), Encoding.UTF8.GetBytes(fingerprint))).ToLowerInvariant();
 

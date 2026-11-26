@@ -11,13 +11,15 @@ object Schedule {
     val START: LocalTime = LocalTime.of(20, 0)
     val END: LocalTime = LocalTime.of(20, 30)
     val RETRY: Duration = Duration.ofMinutes(5)
+    val WINDOW: Duration = Duration.ofMinutes(30)
     val STALE: Duration = Duration.ofDays(3)
 
-    fun nextAttempt(now: ZonedDateTime, lastSuccessDate: LocalDate?): ZonedDateTime {
+    /** Fenster: [start] bis [start] + 30 Min. */
+    fun nextAttempt(now: ZonedDateTime, lastSuccessDate: LocalDate?, start: LocalTime = START): ZonedDateTime {
         val today = now.toLocalDate()
-        val startToday = today.atTime(START).atZone(now.zone)
-        val endToday = today.atTime(END).atZone(now.zone)
-        val tomorrow = today.plusDays(1).atTime(START).atZone(now.zone)
+        val startToday = today.atTime(start).atZone(now.zone)
+        val endToday = startToday.plus(WINDOW)
+        val tomorrow = today.plusDays(1).atTime(start).atZone(now.zone)
 
         if (lastSuccessDate != null && !lastSuccessDate.isBefore(today)) return tomorrow
         if (now.isBefore(startToday) || now.isEqual(startToday)) return startToday

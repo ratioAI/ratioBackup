@@ -25,7 +25,27 @@ public sealed class BackupStore
         public Dictionary<string, IndexEntry> Index { get; set; } = new();
         public DateTime? LastBackupUtc { get; set; }
         public List<string> HeldBack { get; set; } = new();
+        public List<RunRecord> History { get; set; } = new();
+        public List<TrashEntry> Trash { get; set; } = new();
+        public List<KeptEntry> Kept { get; set; } = new();
     }
+
+    /// <summary>Aus dem Papierkorb wiederhergestellt: bleibt dauerhaft am PC, wird nie automatisch gelöscht.</summary>
+    public sealed record KeptEntry(string Stored, long Size);
+
+    private sealed class RunState
+    {
+        public bool Active;
+        public int TotalFiles, DoneFiles;
+        public long TotalBytes, DoneBytes;
+        public DateTime Started, LastActivity;
+    }
+
+    public const int HistoryMax = 100;
+    public static readonly TimeSpan RunTimeout = TimeSpan.FromMinutes(2);
+    private readonly RunState _run = new();
+    private volatile IReadOnlyList<RunRecord> _historySnapshot = Array.Empty<RunRecord>();
+    private volatile IReadOnlyList<TrashEntry> _trashSnapshot = Array.Empty<TrashEntry>();
 
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = false };
 
@@ -72,8 +92,47 @@ public sealed class BackupStore
     /// <summary>Stand der zurückgehaltenen Löschungen; blockiert nie (auch nicht während eines Uploads).</summary>
     public IReadOnlyList<string> HeldBackDeletions => _heldSnapshot;
 
+    /// <summary>Letzte Läufe, neueste zuerst; blockiert nie.</summary>
+    public IReadOnlyList<RunRecord> History { get { CheckTimeout(); return _historySnapshot; } }
+
+    /// <summary>Papierkorb, zuletzt gelöschte zuerst; blockiert nie.</summary>
+    public IReadOnlyList<TrashEntry> ListTrash() => _trashSnapshot;
+
+    public bool Restore(string id) => WithLock(() =>
+    {
+        var e = _state.Trash.FirstOrDefault(t => t.Id == id);
+        if (e is null) return false;
+        _state.Trash.Remove(e);
+        var source = Path.Combine(_trashDir, e.Day, Native(e.Stored));
+        if (!File.Exists(source)) { Save(); Refresh(); return false; }
+        var stored = UniqueStored(e.Stored);
+        var target = Path.Combine(_deviceDir, Native(stored));
+        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+        File.Move(source, target);
+        _state.Kept.Add(new KeptEntry(stored, e.Size));
+        Save();
+        Refresh();
+        Changed?.Invoke();
+        return true;
+    });
+
+    public void DeletePermanently(IEnumerable<string> ids) => WithLock(() =>
+    {
+        var set = ids.ToHashSet();
+        foreach (var e in _state.Trash.Where(t => set.Contains(t.Id)).ToList())
+        {
+            try { File.Delete(Path.Combine(_trashDir, e.Day, Native(e.Stored))); } catch (IOException) { }
+            _state.Trash.Remove(e);
+        }
+        Save();
+        Refresh();
+        Changed?.Invoke();
+        return 0;
+    });
+
     public ManifestResult ApplyManifest(ManifestRequest m) => WithLock(() =>
     {
+        if (_run.Active) FinishRun("interrupted");
         var onPhone = new Dictionary<string, FileEntry>();
         foreach (var f in m.Files)
             if (PathMapper.IsSafe(f.Path)) onPhone[f.Path] = f;
@@ -103,6 +162,14 @@ public sealed class BackupStore
         }
 
         _state.HeldBack = held;
+        var now = _utcNow();
+        _run.Active = true;
+        _run.TotalFiles = needed.Count;
+        _run.DoneFiles = 0;
+        _run.TotalBytes = needed.Sum(n => Math.Max(0, onPhone[n.Path].Size - n.Offset));
+        _run.DoneBytes = 0;
+        _run.Started = now;
+        _run.LastActivity = now;
         Save();
         Refresh();
         Changed?.Invoke();
@@ -143,6 +210,7 @@ public sealed class BackupStore
                     if (fs.Length + n > size) { fs.Close(); DeletePart(path); return new UploadResult(UploadOutcome.Corrupt, 0); }
                     await fs.WriteAsync(buffer.AsMemory(0, n));
                     hash.AppendData(buffer, 0, n);
+                    if (_run.Active) { _run.DoneBytes += n; _run.LastActivity = _utcNow(); }
                 }
                 length = fs.Length;
             }
@@ -163,6 +231,7 @@ public sealed class BackupStore
             File.Delete(part + ".json");
             File.SetLastWriteTimeUtc(target, DateTimeOffset.FromUnixTimeMilliseconds(mtimeMs).UtcDateTime);
             _state.Index[path] = new IndexEntry(stored, size, mtimeMs);
+            if (_run.Active) _run.DoneFiles++;
             MaybeSave();
 
             var share = QuotaBytes > 0 ? (double)UsedBytes() / QuotaBytes : 0;
@@ -183,6 +252,7 @@ public sealed class BackupStore
     public void Complete() => WithLock(() =>
     {
         _state.LastBackupUtc = _utcNow();
+        if (_run.Active) FinishRun("ok");
         PurgeTrash(all: false);
         Save();
         Refresh();
@@ -210,13 +280,45 @@ public sealed class BackupStore
     });
 
     /// <summary>Letzter bekannter Stand; blockiert nie (auch nicht während eines Uploads).</summary>
-    public StatusDto GetStatus() => _snapshot with { QuotaBytes = QuotaBytes };
+    public StatusDto GetStatus()
+    {
+        CheckTimeout();
+        return _snapshot with { QuotaBytes = QuotaBytes };
+    }
+
+    /// <summary>Ein Lauf ohne Aktivität seit 2 Minuten gilt als unterbrochen (Handy weg, WLAN aus).</summary>
+    private void CheckTimeout()
+    {
+        var snap = _snapshot.Run;
+        if (snap is not { Active: true } || _utcNow() - snap.LastActivityUtc <= RunTimeout) return;
+        if (!_lock.Wait(0)) return; // gerade aktiv – dann ist der Lauf ohnehin nicht abgelaufen
+        try
+        {
+            if (_run.Active && _utcNow() - _run.LastActivity > RunTimeout)
+            {
+                FinishRun("interrupted");
+                Save();
+                Refresh();
+            }
+        }
+        finally { _lock.Release(); }
+    }
+
+    private void FinishRun(string result)
+    {
+        _run.Active = false;
+        _state.History.Insert(0, new RunRecord(_run.Started, result == "ok" ? _utcNow() : _run.LastActivity, _run.DoneFiles, _run.DoneBytes, result));
+        if (_state.History.Count > HistoryMax) _state.History.RemoveRange(HistoryMax, _state.History.Count - HistoryMax);
+    }
 
     /// <summary>Nur unter der Sperre aufrufen.</summary>
     private void Refresh()
     {
-        _snapshot = new StatusDto(UsedBytes(), QuotaBytes, DirSize(_trashDir), _state.LastBackupUtc, _state.HeldBack.Count > 0);
+        var run = new RunInfo(_run.Active, _run.TotalFiles, _run.DoneFiles, _run.TotalBytes, _run.DoneBytes, _run.Started, _run.LastActivity);
+        _snapshot = new StatusDto(UsedBytes(), QuotaBytes, DirSize(_trashDir), _state.LastBackupUtc, _state.HeldBack.Count > 0, run);
         _heldSnapshot = _state.HeldBack.ToList();
+        _historySnapshot = _state.History.ToList();
+        _trashSnapshot = _state.Trash.OrderByDescending(t => t.DeletedUtc).ToList();
     }
 
     // ---- intern ----
@@ -261,11 +363,14 @@ public sealed class BackupStore
         File.Delete(part + ".json");
     }
 
-    private string StoredPathFor(string phonePath)
+    private string StoredPathFor(string phonePath) => UniqueStored(PathMapper.ToWindowsRelative(phonePath));
+
+    /// <summary>Freier Ablagepfad: belegt durch Index, wiederhergestellte Dateien oder eine Datei auf der Platte → "~2", "~3" …</summary>
+    private string UniqueStored(string rel)
     {
-        var rel = PathMapper.ToWindowsRelative(phonePath);
-        var taken = new HashSet<string>(_state.Index.Values.Select(v => v.Stored), StringComparer.OrdinalIgnoreCase);
-        if (!taken.Contains(rel)) return rel;
+        var taken = new HashSet<string>(_state.Index.Values.Select(v => v.Stored).Concat(_state.Kept.Select(k => k.Stored)), StringComparer.OrdinalIgnoreCase);
+        bool Free(string c) => !taken.Contains(c) && !File.Exists(Path.Combine(_deviceDir, Native(c)));
+        if (Free(rel)) return rel;
         var slash = rel.LastIndexOf('\\');
         var dir = slash >= 0 ? rel[..(slash + 1)] : "";
         var file = rel[(slash + 1)..];
@@ -275,7 +380,7 @@ public sealed class BackupStore
         for (var i = 2; ; i++)
         {
             var candidate = $"{dir}{name}~{i}{ext}";
-            if (!taken.Contains(candidate)) return candidate;
+            if (Free(candidate)) return candidate;
         }
     }
 
@@ -288,6 +393,8 @@ public sealed class BackupStore
         var target = Path.Combine(_trashDir, day, Native(e.Stored));
         Directory.CreateDirectory(Path.GetDirectoryName(target)!);
         File.Move(source, target, overwrite: true);
+        _state.Trash.RemoveAll(t => t.Day == day && string.Equals(t.Stored, e.Stored, StringComparison.OrdinalIgnoreCase));
+        _state.Trash.Add(new TrashEntry(Guid.NewGuid().ToString("N"), phonePath, e.Stored, day, e.Size, _utcNow()));
     }
 
     private void PurgeTrash(bool all)
@@ -299,11 +406,15 @@ public sealed class BackupStore
             var ok = DateTime.TryParseExact(Path.GetFileName(dir), "yyyy-MM-dd", CultureInfo.InvariantCulture,
                 DateTimeStyles.None, out var date);
             if (all || (ok && date < cutoff))
+            {
                 Directory.Delete(dir, recursive: true);
+                var day = Path.GetFileName(dir);
+                _state.Trash.RemoveAll(t => t.Day == day);
+            }
         }
     }
 
-    private long UsedBytes() => _state.Index.Values.Sum(v => v.Size) + DirSize(_trashDir) + DirSize(_partsDir, "*.part");
+    private long UsedBytes() => _state.Index.Values.Sum(v => v.Size) + _state.Kept.Sum(k => k.Size) + DirSize(_trashDir) + DirSize(_partsDir, "*.part");
 
     private static long DirSize(string dir, string pattern = "*") =>
         Directory.Exists(dir)
