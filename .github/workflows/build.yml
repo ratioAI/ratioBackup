@@ -36,6 +36,7 @@ jobs:
 
   android:
     needs: keystore
+    if: always()
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -44,10 +45,12 @@ jobs:
         env:
           PW: ${{ secrets.KEYSTORE_PASSWORD }}
         run: |
-          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in android/keystore/release.jks.enc -out "$RUNNER_TEMP/release.jks" -pass env:PW
-          echo "RB_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
           echo "RB_VERSION_CODE=$((100 + ${{ github.run_number }}))" >> "$GITHUB_ENV"
           echo "RB_VERSION_NAME=0.${{ github.run_number }}" >> "$GITHUB_ENV"
+          # Ohne Schlüssel (Secret fehlt) laufen Tests trotzdem; das Release-Job verlangt aber einen gültigen Schlüssel.
+          [ -f android/keystore/release.jks.enc ] && [ -n "$PW" ] || { echo "kein Schlüssel – APK wird nur zum Testen signiert"; exit 0; }
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in android/keystore/release.jks.enc -out "$RUNNER_TEMP/release.jks" -pass env:PW
+          echo "RB_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -143,7 +146,7 @@ jobs:
           for i in 1 2 3; do git push -q origin ci-results && break; git fetch -q --depth=1 origin ci-results && git rebase -q FETCH_HEAD; done
 
   release:
-    needs: [android, pc-test, pc-exe]
+    needs: [keystore, android, pc-test, pc-exe]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
