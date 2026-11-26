@@ -301,7 +301,7 @@ internal sealed class TrayApp : ApplicationContext
             _api = null;
             Task.Run(async () =>
             {
-                try { await api.StopAsync(TimeSpan.FromSeconds(3)); } catch { }
+                try { using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3)); await api.StopAsync(cts.Token); } catch { }
                 try { await api.DisposeAsync(); } catch { }
             }).Wait(TimeSpan.FromSeconds(5));
         }
