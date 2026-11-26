@@ -30,6 +30,7 @@ jobs:
           keytool -genkeypair -keystore "$RUNNER_TEMP/release.jks" -storetype PKCS12 -storepass:env PW -keypass:env PW -alias ratiobackup \
             -keyalg RSA -keysize 4096 -validity 10000 -dname "CN=RatioBackup, O=ratioAI" 2> "$RUNNER_TEMP/kt.log" \
             || fail "keytool: $(tail -c 300 "$RUNNER_TEMP/kt.log" | tr '\n' ' ')"
+          mkdir -p android/keystore
           openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -in "$RUNNER_TEMP/release.jks" -out android/keystore/release.jks.enc -pass env:PW \
             || fail "openssl fehlgeschlagen"
           rm "$RUNNER_TEMP/release.jks"
