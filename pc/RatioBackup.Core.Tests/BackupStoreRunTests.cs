@@ -49,11 +49,32 @@ public sealed class BackupStoreRunTests : IDisposable
     }
 
     [Fact]
+    public void Run_SurvivesLongPauseWhilePhoneHashes()
+    {
+        var s = NewStore();
+        s.ApplyManifest(M(("DCIM/a.jpg", 10)));
+        _now = _now.AddMinutes(5);
+        Assert.True(s.GetStatus().Run!.Active);
+        Assert.Empty(s.History);
+    }
+
+    [Fact]
+    public async Task Upload_UntrackedFileOnDisk_OverwritesNotDuplicate()
+    {
+        var s = NewStore();
+        Directory.CreateDirectory(Dev("DCIM"));
+        File.WriteAllBytes(Dev(Path.Combine("DCIM", "a.jpg")), Bytes(5, 3)); // z. B. hochgeladen, aber Index nicht mehr gespeichert
+        await Put(s, "DCIM/a.jpg", Bytes(5, 4));
+        Assert.Equal(Bytes(5, 4), File.ReadAllBytes(Dev(Path.Combine("DCIM", "a.jpg"))));
+        Assert.Single(Directory.GetFiles(Dev("DCIM")));
+    }
+
+    [Fact]
     public void Run_TimesOutAfterInactivity()
     {
         var s = NewStore();
         s.ApplyManifest(M(("DCIM/a.jpg", 10)));
-        _now = _now.AddMinutes(2).AddSeconds(1);
+        _now = _now.AddMinutes(10).AddSeconds(1);
         Assert.False(s.GetStatus().Run?.Active ?? false);
         Assert.Equal("interrupted", s.History.Single().Result);
     }
