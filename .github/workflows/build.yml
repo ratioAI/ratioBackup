@@ -25,14 +25,18 @@ jobs:
         run: |
           if [ -f android/keystore/release.jks.enc ]; then echo "Schlüssel vorhanden"; exit 0; fi
           if [ -z "$PW" ]; then echo "::error::KEYSTORE_PASSWORD fehlt – bitte unter Settings → Secrets → Actions anlegen"; exit 1; fi
-          keytool -genkeypair -keystore "$RUNNER_TEMP/release.jks" -storepass:env PW -keypass:env PW -alias ratiobackup \
-            -keyalg RSA -keysize 4096 -validity 10000 -dname "CN=RatioBackup, O=ratioAI"
-          openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -in "$RUNNER_TEMP/release.jks" -out android/keystore/release.jks.enc -pass env:PW
+          fail() { echo "::error::$1"; exit 1; }
+          command -v keytool >/dev/null || fail "keytool nicht gefunden"
+          keytool -genkeypair -keystore "$RUNNER_TEMP/release.jks" -storetype PKCS12 -storepass:env PW -keypass:env PW -alias ratiobackup \
+            -keyalg RSA -keysize 4096 -validity 10000 -dname "CN=RatioBackup, O=ratioAI" 2> "$RUNNER_TEMP/kt.log" \
+            || fail "keytool: $(tail -c 300 "$RUNNER_TEMP/kt.log" | tr '\n' ' ')"
+          openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -in "$RUNNER_TEMP/release.jks" -out android/keystore/release.jks.enc -pass env:PW \
+            || fail "openssl fehlgeschlagen"
           rm "$RUNNER_TEMP/release.jks"
           git config user.name "ci"; git config user.email "ci@ratiobackup.local"
           git add android/keystore/release.jks.enc
-          git commit -m "chore: Signaturschlüssel angelegt [skip ci]"
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+          git commit -m "chore: Signaturschlüssel angelegt [skip ci]" || fail "commit fehlgeschlagen"
+          git push origin "HEAD:${GITHUB_REF_NAME}" 2> "$RUNNER_TEMP/push.log" || fail "push: $(tail -c 300 "$RUNNER_TEMP/push.log" | tr '\n' ' ')"
 
   android:
     needs: keystore
