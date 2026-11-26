@@ -2,14 +2,20 @@
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
+    <ImplicitUsings>disable</ImplicitUsings>
     <AssemblyName>RatioBackup-PC</AssemblyName>
     <RootNamespace>RatioBackup.Tray</RootNamespace>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <Version Condition="'$(Version)' == ''">0.0.0</Version>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
   </PropertyGroup>
+  <ItemGroup>
+    <ApplicationDefinition Remove="App.xaml" />
+    <Page Include="App.xaml" />
+  </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\RatioBackup.Core\RatioBackup.Core.csproj" />
   </ItemGroup>

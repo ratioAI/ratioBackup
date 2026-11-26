@@ -1,3 +1,7 @@
+using System;
+using System.Linq;
+using System.Threading;
+
 namespace RatioBackup.Tray;
 
 internal static class Program
@@ -12,15 +16,18 @@ internal static class Program
             var acquired = args.Contains("--after-update") && WaitFor(mutex, TimeSpan.FromSeconds(20));
             if (!acquired)
             {
-                MessageBox.Show("RatioBackup läuft bereits (Symbol unten rechts in der Taskleiste).", "RatioBackup");
+                // Läuft schon: das vorhandene Fenster nach vorne holen.
+                SingleInstance.SignalShow();
                 return;
             }
         }
-        ApplicationConfiguration.Initialize();
-        Application.Run(new TrayApp());
-        // Sicherheitsnetz: Hängt noch irgendein Hintergrund-Thread, den Prozess trotzdem beenden,
-        // damit „läuft bereits“ nach dem Schließen nie wieder vorkommt.
+
+        var app = new App();
+        app.InitializeComponent();
+        app.Run();
+
         try { mutex.ReleaseMutex(); } catch (ApplicationException) { }
+        // Sicherheitsnetz: Hängt noch ein Hintergrund-Thread, den Prozess trotzdem beenden.
         Environment.Exit(0);
     }
 
@@ -28,5 +35,35 @@ internal static class Program
     {
         try { return m.WaitOne(timeout); }
         catch (AbandonedMutexException) { return true; }
+    }
+}
+
+/// <summary>Zweiter Start: dem laufenden Programm über ein benanntes Ereignis sagen, dass es sein Fenster zeigen soll.</summary>
+internal static class SingleInstance
+{
+    private const string EventName = "RatioBackup.Tray.Show";
+
+    public static void SignalShow()
+    {
+        try
+        {
+            using var ev = EventWaitHandle.OpenExisting(EventName);
+            ev.Set();
+        }
+        catch (WaitHandleCannotBeOpenedException) { }
+    }
+
+    public static void Listen(Action onShow)
+    {
+        var ev = new EventWaitHandle(false, EventResetMode.AutoReset, EventName);
+        var t = new Thread(() =>
+        {
+            while (true)
+            {
+                ev.WaitOne();
+                onShow();
+            }
+        }) { IsBackground = true };
+        t.Start();
     }
 }

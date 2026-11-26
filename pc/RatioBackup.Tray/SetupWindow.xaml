@@ -1,0 +1,20 @@
+<Window x:Class="RatioBackup.Tray.SetupWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="RatioBackup einrichten" Width="560" SizeToContent="Height" ResizeMode="NoResize"
+        WindowStartupLocation="CenterScreen" Background="{DynamicResource Bg}" FontFamily="{StaticResource UiFont}">
+  <StackPanel Margin="28">
+    <TextBlock Text="Willkommen bei RatioBackup" Style="{StaticResource H1}" FontSize="24" />
+    <TextBlock Text="Wohin soll dein Handy gesichert werden? Am besten ein Laufwerk mit viel Platz, nicht C:." Style="{StaticResource Body}" Foreground="{DynamicResource Muted}" Margin="0,6,0,18" />
+    <TextBlock Text="Ordner" Style="{StaticResource Label}" Margin="0,0,0,4" />
+    <DockPanel>
+      <Button x:Name="Browse" DockPanel.Dock="Right" Content="Durchsuchen …" Style="{StaticResource Secondary}" Margin="8,0,0,0" Click="Browse_Click" />
+      <TextBox x:Name="FolderBox" />
+    </DockPanel>
+    <TextBlock Text="Speicherlimit in GB" Style="{StaticResource Label}" Margin="0,16,0,4" />
+    <TextBox x:Name="QuotaBox" Width="100" HorizontalAlignment="Left" Text="100" />
+    <TextBlock Text="Ist das Limit erreicht, wird erst der Papierkorb geleert, dann pausiert die Sicherung." Style="{StaticResource Label}" Margin="0,6,0,0" />
+    <TextBlock x:Name="Error" Foreground="{DynamicResource Danger}" Margin="0,12,0,0" Visibility="Collapsed" TextWrapping="Wrap" />
+    <Button Content="Weiter" Style="{StaticResource Primary}" HorizontalAlignment="Right" Width="120" Margin="0,22,0,0" IsDefault="True" Click="Ok_Click" />
+  </StackPanel>
+</Window>
