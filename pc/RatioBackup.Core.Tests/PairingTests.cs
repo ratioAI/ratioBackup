@@ -7,6 +7,9 @@ public class PairingTests
     private PairingService New(string fp = "abc") => new(_settings, fp, () => _now);
 
     [Fact]
+    public void VerifyCode_first4Upper() => Assert.Equal("4F2A", PairingService.VerifyCode("4f2a9c00ff"));
+
+    [Fact]
     public void NewCode_IsSixDigits()
     {
         var code = New().NewCode();

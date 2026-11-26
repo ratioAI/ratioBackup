@@ -89,4 +89,13 @@ class ScannerTest {
         ),
         PathFilter.ROOTS,
     )
+
+    @Test
+    fun scan_onlySelectedRoots() {
+        file("DCIM/a.jpg")
+        file("Download/b.pdf")
+        val r = Scanner(tmp.root, listOf("DCIM")).scan()
+        assertEquals(listOf("DCIM/a.jpg"), r.files.map { it.path })
+        assertEquals(listOf("DCIM"), r.roots)
+    }
 }

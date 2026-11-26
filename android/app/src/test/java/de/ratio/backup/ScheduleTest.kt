@@ -42,4 +42,11 @@ class ScheduleTest {
         assertFalse(Schedule.needsStaleWarning(now, now.toInstant().minus(Duration.ofDays(2).plusHours(23))))
     }
     @Test fun staleWarning_neverBackedUp_false() = assertFalse(Schedule.needsStaleWarning(at(2026, 11, 26, 20, 0), null))
+
+    private val seven = java.time.LocalTime.of(19, 15)
+    @Test fun customTime_before_sameDay() = assertEquals(at(2026, 11, 26, 19, 15), Schedule.nextAttempt(at(2026, 11, 26, 12, 0), null, seven))
+    @Test fun customTime_window_plus5() = assertEquals(at(2026, 11, 26, 19, 25), Schedule.nextAttempt(at(2026, 11, 26, 19, 20), null, seven))
+    @Test fun customTime_afterWindow_tomorrow() = assertEquals(at(2026, 11, 27, 19, 15), Schedule.nextAttempt(at(2026, 11, 26, 19, 46), null, seven))
+    @Test fun customTime_successToday_tomorrowAtNewTime() =
+        assertEquals(at(2026, 11, 27, 19, 15), Schedule.nextAttempt(at(2026, 11, 26, 10, 0), LocalDate.of(2026, 11, 26), seven))
 }
