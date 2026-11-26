@@ -270,7 +270,7 @@ public sealed class BackupStore
         {
             var ok = DateTime.TryParseExact(Path.GetFileName(dir), "yyyy-MM-dd", CultureInfo.InvariantCulture,
                 DateTimeStyles.None, out var date);
-            if (all || (ok && date <= cutoff))
+            if (all || (ok && date < cutoff))
                 Directory.Delete(dir, recursive: true);
         }
     }
