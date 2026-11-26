@@ -13,10 +13,41 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  android:
+  # Legt einmalig den Signaturschlüssel an (verschlüsselt mit dem Secret KEYSTORE_PASSWORD) und committet ihn.
+  keystore:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with: { ref: "${{ github.ref }}" }
+      - name: Schlüssel anlegen, falls noch keiner da ist
+        env:
+          PW: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          if [ -f android/keystore/release.jks.enc ]; then echo "Schlüssel vorhanden"; exit 0; fi
+          if [ -z "$PW" ]; then echo "::error::KEYSTORE_PASSWORD fehlt – bitte unter Settings → Secrets → Actions anlegen"; exit 1; fi
+          keytool -genkeypair -keystore "$RUNNER_TEMP/release.jks" -storepass:env PW -keypass:env PW -alias ratiobackup \
+            -keyalg RSA -keysize 4096 -validity 10000 -dname "CN=RatioBackup, O=ratioAI"
+          openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -in "$RUNNER_TEMP/release.jks" -out android/keystore/release.jks.enc -pass env:PW
+          rm "$RUNNER_TEMP/release.jks"
+          git config user.name "ci"; git config user.email "ci@ratiobackup.local"
+          git add android/keystore/release.jks.enc
+          git commit -m "chore: Signaturschlüssel angelegt [skip ci]"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+
+  android:
+    needs: keystore
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: "${{ github.ref }}" }
+      - name: Schlüssel entschlüsseln
+        env:
+          PW: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in android/keystore/release.jks.enc -out "$RUNNER_TEMP/release.jks" -pass env:PW
+          echo "RB_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+          echo "RB_VERSION_CODE=$((100 + ${{ github.run_number }}))" >> "$GITHUB_ENV"
+          echo "RB_VERSION_NAME=0.${{ github.run_number }}" >> "$GITHUB_ENV"
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -25,11 +56,13 @@ jobs:
       - name: Tests und Test-APK
         id: build
         working-directory: android
+        env:
+          RB_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
         run: |
           set -o pipefail
           chmod +x gradlew
-          ./gradlew testDebugUnitTest assembleDebug --console=plain 2>&1 | tee ../android.log
-          cp app/build/outputs/apk/debug/app-debug.apk ../RatioBackup.apk
+          ./gradlew testDebugUnitTest assembleRelease --console=plain 2>&1 | tee ../android.log
+          cp app/build/outputs/apk/release/app-release.apk ../RatioBackup.apk
       - name: Zusammenfassung
         if: always()
         run: python3 tools/summarize.py android "${{ steps.build.outcome }}" android.log android/app/build/test-results > result-android.md
@@ -69,7 +102,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          dotnet publish pc/RatioBackup.Tray/RatioBackup.Tray.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o out 2>&1 | tee exe.log
+          dotnet publish pc/RatioBackup.Tray/RatioBackup.Tray.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:Version=0.${{ github.run_number }}.0 -o out 2>&1 | tee exe.log
           cp out/RatioBackup-PC.exe RatioBackup-PC.exe
       - name: Zusammenfassung
         if: always()
@@ -83,7 +116,7 @@ jobs:
         with: { name: exe, path: RatioBackup-PC.exe }
 
   report:
-    needs: [android, pc-test, pc-exe]
+    needs: [keystore, android, pc-test, pc-exe]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -124,5 +157,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          NOTES=$(git log -1 --pretty=%s | python3 -c "import json,sys;print(json.dumps(sys.stdin.read().strip()))")
+          echo "{\"versionCode\":$((100 + ${{ github.run_number }})),\"versionName\":\"0.${{ github.run_number }}\",\"notes\":$NOTES,\"apk\":\"RatioBackup.apk\",\"exe\":\"RatioBackup-PC.exe\"}" > dl/version.json
+          cat dl/version.json
           gh release view test >/dev/null 2>&1 || gh release create test --title "RatioBackup Testversion" --notes "Automatisch gebaut aus dem aktuellen Stand von main."
-          gh release upload test dl/RatioBackup.apk dl/RatioBackup-PC.exe --clobber
+          gh release upload test dl/RatioBackup.apk dl/RatioBackup-PC.exe dl/version.json --clobber

@@ -8,6 +8,7 @@
     <AssemblyName>RatioBackup-PC</AssemblyName>
     <RootNamespace>RatioBackup.Tray</RootNamespace>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <Version Condition="'$(Version)' == ''">0.0.0</Version>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\RatioBackup.Core\RatioBackup.Core.csproj" />

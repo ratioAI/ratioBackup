@@ -15,18 +15,28 @@ android {
         applicationId = "de.ratio.backup"
         minSdk = 31
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = (System.getenv("RB_VERSION_CODE") ?: "1").toInt()
+        versionName = System.getenv("RB_VERSION_NAME") ?: "0.0-lokal"
     }
 
-    // Fester Test-Schlüssel im Repo (wie bei Jarvis): Updates lassen sich über die alte
-    // Version installieren. Nur für Testversionen in einem privaten Repo.
+    // Signaturschlüssel: liegt verschlüsselt im Repo (keystore/release.jks.enc), die CI entschlüsselt ihn
+    // mit dem Secret KEYSTORE_PASSWORD. Lokal ohne Schlüssel wird mit dem Debug-Schlüssel signiert.
+    val ks = System.getenv("RB_KEYSTORE")
     signingConfigs {
-        getByName("debug") {
-            storeFile = rootProject.file("keystore/ratiobackup-test.jks")
-            storePassword = "ratiobackup"
-            keyAlias = "ratiobackup"
-            keyPassword = "ratiobackup"
+        create("ratio") {
+            if (ks != null) {
+                storeFile = file(ks)
+                storePassword = System.getenv("RB_KEYSTORE_PASSWORD")
+                keyAlias = "ratiobackup"
+                keyPassword = System.getenv("RB_KEYSTORE_PASSWORD")
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+            signingConfig = if (ks != null) signingConfigs.getByName("ratio") else signingConfigs.getByName("debug")
         }
     }
 
@@ -37,6 +47,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     testOptions {
