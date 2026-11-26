@@ -1,0 +1,128 @@
+name: Bauen und testen
+
+on:
+  push:
+    branches: ['**', '!ci-results']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Tests und Test-APK
+        id: build
+        working-directory: android
+        run: |
+          set -o pipefail
+          chmod +x gradlew
+          ./gradlew testDebugUnitTest assembleDebug --console=plain 2>&1 | tee ../android.log
+          cp app/build/outputs/apk/debug/app-debug.apk ../RatioBackup.apk
+      - name: Zusammenfassung
+        if: always()
+        run: python3 tools/summarize.py android "${{ steps.build.outcome }}" android.log android/app/build/test-results > result-android.md
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: result-android, path: result-android.md }
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with: { name: apk, path: RatioBackup.apk }
+
+  pc-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with: { dotnet-version: 8.0.x }
+      - name: Tests
+        id: build
+        run: |
+          set -o pipefail
+          dotnet test pc/RatioBackup.Core.Tests/RatioBackup.Core.Tests.csproj --logger trx --results-directory pc-results 2>&1 | tee pc.log
+      - name: Zusammenfassung
+        if: always()
+        run: python3 tools/summarize.py pc-test "${{ steps.build.outcome }}" pc.log pc-results > result-pc-test.md
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: result-pc-test, path: result-pc-test.md }
+
+  pc-exe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with: { dotnet-version: 8.0.x }
+      - name: EXE bauen
+        id: build
+        shell: bash
+        run: |
+          set -o pipefail
+          dotnet publish pc/RatioBackup.Tray/RatioBackup.Tray.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o out 2>&1 | tee exe.log
+          cp out/RatioBackup-PC.exe RatioBackup-PC.exe
+      - name: Zusammenfassung
+        if: always()
+        shell: bash
+        run: python tools/summarize.py pc-exe "${{ steps.build.outcome }}" exe.log > result-pc-exe.md
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: result-pc-exe, path: result-pc-exe.md }
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with: { name: exe, path: RatioBackup-PC.exe }
+
+  report:
+    needs: [android, pc-test, pc-exe]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 1 }
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: result-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/res
+      - name: Ergebnis in Branch ci-results schreiben
+        run: |
+          R="${{ runner.temp }}/res"
+          for j in android pc-test pc-exe; do [ -f "$R/result-$j.md" ] || echo "## $j: missing" > "$R/result-$j.md"; done
+          { echo "# ${GITHUB_SHA} (${GITHUB_REF_NAME})"; cat "$R"/result-android.md "$R"/result-pc-test.md "$R"/result-pc-exe.md; } > "$R/all.md"
+          git config user.name "ci"; git config user.email "ci@ratiobackup.local"
+          if git ls-remote --exit-code origin ci-results >/dev/null; then
+            git fetch -q --depth=1 origin ci-results && git checkout -q -B ci-results FETCH_HEAD
+          else
+            git checkout -q --orphan ci-results && git rm -rfq .
+          fi
+          mkdir -p results && cp "$R/all.md" "results/${GITHUB_SHA}.md" && cp "$R/all.md" latest.md
+          git add results latest.md && git commit -qm "Ergebnis ${GITHUB_SHA}"
+          for i in 1 2 3; do git push -q origin ci-results && break; git fetch -q --depth=1 origin ci-results && git rebase -q FETCH_HEAD; done
+
+  release:
+    needs: [android, pc-test, pc-exe]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { path: dl, merge-multiple: true }
+      # Feste Download-Links:
+      # https://github.com/ratioAI/ratioBackup/releases/latest/download/RatioBackup.apk
+      # https://github.com/ratioAI/ratioBackup/releases/latest/download/RatioBackup-PC.exe
+      - name: Als Release veröffentlichen
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view test >/dev/null 2>&1 || gh release create test --title "RatioBackup Testversion" --notes "Automatisch gebaut aus dem aktuellen Stand von main."
+          gh release upload test dl/RatioBackup.apk dl/RatioBackup-PC.exe --clobber
