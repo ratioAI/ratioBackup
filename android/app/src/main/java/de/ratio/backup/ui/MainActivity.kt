@@ -15,6 +15,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import de.ratio.backup.backup.Notifier
 import de.ratio.backup.backup.Prefs
@@ -30,7 +31,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             val dark = isSystemInDarkTheme()
             MaterialTheme(colorScheme = if (dark) dynamicDarkColorScheme(this) else dynamicLightColorScheme(this)) {
-                Surface(Modifier.fillMaxSize()) {
+                Surface(Modifier.fillMaxSize().safeDrawingPadding()) {
                     var refresh by remember { mutableIntStateOf(0) }
                     var showSetup by remember { mutableStateOf(!prefs.isPaired || !Permissions.hasAllFiles()) }
                     LifecycleResumeEffect(Unit) {

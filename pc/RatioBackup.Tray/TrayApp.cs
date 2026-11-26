@@ -22,6 +22,11 @@ internal sealed class TrayApp : ApplicationContext
     private PairingForm? _pairingForm;
     private DateTime _lastQuotaWarning = DateTime.MinValue;
     private bool _deletionPromptOpen;
+    private UpdateInfo? _update;
+    private readonly ToolStripMenuItem _updateItem = new("Nach Updates suchen");
+    private readonly System.Windows.Forms.Timer _updateTimer = new() { Interval = 6 * 60 * 60 * 1000 };
+    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMinutes(10) };
+    private DateTime _lastUpload = DateTime.MinValue;
 
     public TrayApp()
     {
@@ -42,6 +47,8 @@ internal sealed class TrayApp : ApplicationContext
         menu.Items.Add("Handy neu koppeln", null, (_, _) => ShowPairing());
         menu.Items.Add("Speicherlimit ändern…", null, (_, _) => ChangeQuota());
         menu.Items.Add(_autostartItem);
+        _updateItem.Click += async (_, _) => { if (_update != null) await InstallUpdate(); else await CheckForUpdate(manual: true); };
+        menu.Items.Add(_updateItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Beenden", null, (_, _) => ExitThread());
 
@@ -57,7 +64,59 @@ internal sealed class TrayApp : ApplicationContext
         }
 
         Autostart.Apply(_settings.Autostart);
+        if (Environment.ProcessPath is { } exe) SelfUpdater.CleanupOld(exe);
         Start();
+        _updateTimer.Tick += async (_, _) => await CheckForUpdate(manual: false);
+        _updateTimer.Start();
+        _ = CheckForUpdate(manual: false);
+    }
+
+    private static Version CurrentVersion =>
+        typeof(TrayApp).Assembly.GetName().Version ?? new Version(0, 0, 0);
+
+    private async Task CheckForUpdate(bool manual)
+    {
+        _update = await new UpdateChecker(Http).CheckAsync(CurrentVersion);
+        if (_update != null)
+        {
+            _updateItem.Text = $"Update {_update.VersionName} installieren";
+            _icon.ShowBalloonTip(8000, "RatioBackup – Update verfügbar",
+                $"Version {_update.VersionName} ist da. Rechtsklick aufs Symbol → „Update installieren“.", ToolTipIcon.Info);
+        }
+        else if (manual)
+        {
+            MessageBox.Show($"Du hast die neueste Version ({CurrentVersion.Major}.{CurrentVersion.Minor}).", "RatioBackup");
+        }
+    }
+
+    private async Task InstallUpdate()
+    {
+        if (_update is null || Environment.ProcessPath is not { } exe) return;
+        if (DateTime.UtcNow - _lastUpload < TimeSpan.FromMinutes(2))
+        {
+            MessageBox.Show("Gerade läuft eine Sicherung. Das Update geht, sobald sie fertig ist.", "RatioBackup");
+            return;
+        }
+        var tmp = exe + ".download";
+        try
+        {
+            _updateItem.Enabled = false;
+            _updateItem.Text = "Update wird geladen …";
+            await new UpdateChecker(Http).DownloadExeAsync(_update, tmp,
+                new Progress<double>(p => _updateItem.Text = $"Update wird geladen … {p:P0}"));
+            _store?.Flush();
+            SelfUpdater.ApplyUpdate(exe, tmp);
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(exe, "--after-update") { UseShellExecute = true });
+            ExitThread();
+        }
+        catch (Exception ex)
+        {
+            try { File.Delete(tmp); } catch { }
+            _updateItem.Enabled = true;
+            _updateItem.Text = $"Update {_update.VersionName} installieren";
+            MessageBox.Show($"Update fehlgeschlagen: {ex.Message}\nDie bisherige Version läuft weiter.", "RatioBackup",
+                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
     }
 
     private bool RunSetup()
@@ -113,6 +172,7 @@ internal sealed class TrayApp : ApplicationContext
     private void OnStoreChanged()
     {
         if (_store is null) return;
+        _lastUpload = DateTime.UtcNow;
         var st = _store.GetStatus();
         var last = st.LastBackupUtc is { } t ? t.ToLocalTime().ToString("dd.MM. HH:mm") : "noch keine";
         var text = $"RatioBackup – Letzte Sicherung: {last}";
