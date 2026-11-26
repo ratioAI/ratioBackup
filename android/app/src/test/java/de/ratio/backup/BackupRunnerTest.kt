@@ -3,6 +3,8 @@ package de.ratio.backup
 import de.ratio.backup.backup.BackupRunner
 import de.ratio.backup.backup.RunOutcome
 import de.ratio.backup.net.BackupApiPort
+import de.ratio.backup.net.FileChangedException
+import de.ratio.backup.net.PcErrorException
 import de.ratio.backup.net.ManifestResult
 import de.ratio.backup.net.NeededFile
 import de.ratio.backup.net.Status
@@ -15,6 +17,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
+import java.io.FileNotFoundException
 import java.io.IOException
 
 class BackupRunnerTest {
@@ -26,7 +29,9 @@ class BackupRunnerTest {
         val needed: List<NeededFile>,
         val answers: MutableList<UploadResult> = mutableListOf(),
         val failUpload: Boolean = false,
+        val throwFor: Map<String, Exception> = emptyMap(),
     ) : BackupApiPort {
+        var manifestCalled = false
         val uploads = mutableListOf<Pair<String, Long>>()
         var completed = false
         var manifestRoots: List<String>? = null
@@ -34,10 +39,12 @@ class BackupRunnerTest {
         override suspend fun status() = Status(0, 0, 0)
         override suspend fun manifest(roots: List<String>, files: List<FileEntry>): ManifestResult {
             manifestRoots = roots
+            manifestCalled = true
             return ManifestResult(needed, 0, 0)
         }
         override suspend fun upload(file: File, entry: FileEntry, offset: Long): UploadResult {
             if (failUpload) throw IOException("WLAN weg")
+            throwFor[entry.path]?.let { throw it }
             uploads += entry.path to offset
             return if (answers.isEmpty()) UploadResult.Done else answers.removeAt(0)
         }
@@ -108,5 +115,36 @@ class BackupRunnerTest {
         val api = FakeApi(listOf(NeededFile("DCIM/fremd.jpg", 0)))
         assertEquals(RunOutcome.Success(0, 0), runner(api).run { _, _ -> })
         assertTrue(api.uploads.isEmpty())
+    }
+
+    private fun both() = listOf(NeededFile("DCIM/a.jpg", 0), NeededFile("DCIM/b.jpg", 0))
+
+    @Test
+    fun fileVanished_skipsFile_runCompletes() = runBlocking {
+        val api = FakeApi(both(), throwFor = mapOf("DCIM/a.jpg" to FileNotFoundException("weg")))
+        assertEquals(RunOutcome.Success(uploaded = 1, skipped = 1), runner(api).run { _, _ -> })
+        assertTrue(api.completed)
+    }
+
+    @Test
+    fun fileShrank_skipsFile_runCompletes() = runBlocking {
+        val api = FakeApi(both(), throwFor = mapOf("DCIM/a.jpg" to FileChangedException("kürzer")))
+        assertEquals(RunOutcome.Success(uploaded = 1, skipped = 1), runner(api).run { _, _ -> })
+    }
+
+    @Test
+    fun pcErrorForOneFile_skipsFile_runCompletes() = runBlocking {
+        val api = FakeApi(both(), throwFor = mapOf("DCIM/a.jpg" to PcErrorException(500)))
+        assertEquals(RunOutcome.Success(uploaded = 1, skipped = 1), runner(api).run { _, _ -> })
+        assertTrue(api.completed)
+    }
+
+    @Test
+    fun noStorageAccess_noManifest() = runBlocking {
+        val api = FakeApi(both())
+        val r = BackupRunner({ scan }, api, { File(it.path) }, hasStorageAccess = { false }).run { _, _ -> }
+        assertEquals(RunOutcome.NoStorageAccess, r)
+        assertFalse(api.manifestCalled)
+        assertFalse(api.completed)
     }
 }

@@ -279,4 +279,61 @@ public sealed class BackupStoreTests : IDisposable
     [Fact]
     public async Task UnsafePath_Throws()
         => await Assert.ThrowsAsync<ArgumentException>(() => NewStore().WriteAsync("../x", 1, Mtime, 0, new MemoryStream(new byte[1]), null));
+
+    private sealed class BlockingStream : Stream
+    {
+        public readonly TaskCompletionSource Release = new();
+        public readonly TaskCompletionSource Entered = new();
+        private bool _done;
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default)
+        {
+            if (_done) return 0;
+            Entered.TrySetResult();
+            await Release.Task;
+            _done = true;
+            buffer.Span[0] = 1;
+            return 1;
+        }
+        public override int Read(byte[] b, int o, int c) => throw new NotSupportedException();
+        public override bool CanRead => true; public override bool CanSeek => false; public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => 0; set { } }
+        public override void Flush() { }
+        public override long Seek(long o, SeekOrigin s) => throw new NotSupportedException();
+        public override void SetLength(long v) { }
+        public override void Write(byte[] b, int o, int c) => throw new NotSupportedException();
+    }
+
+    [Fact]
+    public async Task Status_DoesNotBlockDuringUpload()
+    {
+        var s = NewStore();
+        var body = new BlockingStream();
+        var upload = s.WriteAsync("DCIM/v.mp4", 10, Mtime, 0, body, null);
+        await body.Entered.Task;
+        var status = Task.Run(() => (s.GetStatus(), s.HeldBackDeletions.Count));
+        var finished = await Task.WhenAny(status, Task.Delay(2000));
+        body.Release.SetResult();
+        await upload;
+        Assert.Same(status, finished);
+    }
+
+    [Fact]
+    public async Task Index_SavedInBatches()
+    {
+        var s = NewStore();
+        for (var i = 0; i < 300; i++) await Put(s, $"DCIM/{i}.jpg", Bytes(1));
+        Assert.True(s.SaveCount <= 3, $"SaveCount = {s.SaveCount}");
+        s.Complete();
+        Assert.Empty(NewStore().ApplyManifest(Manifest(Enumerable.Range(0, 300).Select(i => ($"DCIM/{i}.jpg", 1L)).ToArray())).Needed);
+    }
+
+    [Fact]
+    public async Task Flush_PersistsIndex()
+    {
+        var s = NewStore();
+        for (var i = 0; i < 5; i++) await Put(s, $"DCIM/{i}.jpg", Bytes(1));
+        s.Flush();
+        Assert.Empty(NewStore().ApplyManifest(Manifest(Enumerable.Range(0, 5).Select(i => ($"DCIM/{i}.jpg", 1L)).ToArray())).Needed);
+    }
 }

@@ -49,6 +49,19 @@ public class PairingTests
     }
 
     [Fact]
+    public void Lockout_SurvivesNewCode_ForOneMinute()
+    {
+        var p = New();
+        p.NewCode();
+        for (var i = 0; i < 5; i++) p.TryPair("x", "x");
+        var code = p.NewCode();
+        Assert.Null(p.TryPair(code, "x"));
+        _now = _now.AddMinutes(1).AddSeconds(1);
+        code = p.NewCode();
+        Assert.NotNull(p.TryPair(code, "x"));
+    }
+
+    [Fact]
     public void Code_IsSingleUse()
     {
         var p = New();
