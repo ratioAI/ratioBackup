@@ -39,3 +39,9 @@ interface BackupApiPort {
     suspend fun upload(file: java.io.File, entry: FileEntry, offset: Long): UploadResult
     suspend fun complete()
 }
+
+/** Der PC hat für eine einzelne Anfrage einen Fehler gemeldet (z. B. 500, Datei am PC gesperrt). */
+class PcErrorException(val code: Int) : java.io.IOException("PC meldet Fehler $code")
+
+/** Die Datei hat sich am Handy während des Hochladens geändert. */
+class FileChangedException(message: String) : java.io.IOException(message)

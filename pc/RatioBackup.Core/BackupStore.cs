@@ -38,6 +38,15 @@ public sealed class BackupStore
     private readonly Func<DateTime> _utcNow;
     private readonly SemaphoreSlim _lock = new(1, 1);
     private readonly State _state;
+    private volatile StatusDto _snapshot = new(0, 0, 0, null, false);
+    private volatile IReadOnlyList<string> _heldSnapshot = Array.Empty<string>();
+    private int _unsaved;
+    private DateTime _lastSave = DateTime.MinValue;
+    public const int SaveEveryFiles = 200;
+    public static readonly TimeSpan SaveEvery = TimeSpan.FromSeconds(5);
+
+    /// <summary>Anzahl Index-Schreibvorgänge (für Tests).</summary>
+    internal int SaveCount { get; private set; }
 
     public long QuotaBytes { get; set; } = 100L * 1024 * 1024 * 1024;
     public event Action<double>? QuotaWarning;
@@ -57,9 +66,11 @@ public sealed class BackupStore
         _state = File.Exists(_statePath)
             ? JsonSerializer.Deserialize<State>(File.ReadAllText(_statePath), Json) ?? new State()
             : new State();
+        Refresh();
     }
 
-    public IReadOnlyList<string> HeldBackDeletions => WithLock(() => _state.HeldBack.ToList());
+    /// <summary>Stand der zurückgehaltenen Löschungen; blockiert nie (auch nicht während eines Uploads).</summary>
+    public IReadOnlyList<string> HeldBackDeletions => _heldSnapshot;
 
     public ManifestResult ApplyManifest(ManifestRequest m) => WithLock(() =>
     {
@@ -93,6 +104,7 @@ public sealed class BackupStore
 
         _state.HeldBack = held;
         Save();
+        Refresh();
         Changed?.Invoke();
         return new ManifestResult(needed, trashed, held.Count);
     });
@@ -118,24 +130,26 @@ public sealed class BackupStore
             }
 
             File.WriteAllText(part + ".json", JsonSerializer.Serialize(new PartMeta(size, mtimeMs), Json));
+            using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
             long length;
-            await using (var fs = new FileStream(part, FileMode.Append, FileAccess.Write, FileShare.None))
+            await using (var fs = new FileStream(part, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
             {
                 var buffer = new byte[81920];
                 int n;
+                // Vorhandenen Teil einmal in die Prüfsumme aufnehmen, danach nur noch neue Bytes.
+                while ((n = await fs.ReadAsync(buffer)) > 0) hash.AppendData(buffer, 0, n);
                 while ((n = await body.ReadAsync(buffer)) > 0)
                 {
                     if (fs.Length + n > size) { fs.Close(); DeletePart(path); return new UploadResult(UploadOutcome.Corrupt, 0); }
                     await fs.WriteAsync(buffer.AsMemory(0, n));
+                    hash.AppendData(buffer, 0, n);
                 }
                 length = fs.Length;
             }
 
             if (length < size) return new UploadResult(UploadOutcome.Partial, length);
 
-            string actual;
-            await using (var rs = File.OpenRead(part))
-                actual = Convert.ToHexString(await SHA256.HashDataAsync(rs)).ToLowerInvariant();
+            var actual = Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
             if (sha256Hex is null || !string.Equals(actual, sha256Hex, StringComparison.OrdinalIgnoreCase))
             {
                 DeletePart(path);
@@ -149,7 +163,7 @@ public sealed class BackupStore
             File.Delete(part + ".json");
             File.SetLastWriteTimeUtc(target, DateTimeOffset.FromUnixTimeMilliseconds(mtimeMs).UtcDateTime);
             _state.Index[path] = new IndexEntry(stored, size, mtimeMs);
-            Save();
+            MaybeSave();
 
             var share = QuotaBytes > 0 ? (double)UsedBytes() / QuotaBytes : 0;
             if (share >= WarnShare) QuotaWarning?.Invoke(share);
@@ -158,15 +172,20 @@ public sealed class BackupStore
         }
         finally
         {
+            Refresh();
             _lock.Release();
         }
     }
+
+    /// <summary>Index sofort speichern (z. B. beim Beenden des Programms).</summary>
+    public void Flush() => WithLock(() => { if (_unsaved > 0) Save(); return 0; });
 
     public void Complete() => WithLock(() =>
     {
         _state.LastBackupUtc = _utcNow();
         PurgeTrash(all: false);
         Save();
+        Refresh();
         Changed?.Invoke();
         return 0;
     });
@@ -176,6 +195,7 @@ public sealed class BackupStore
         foreach (var k in _state.HeldBack) MoveToTrash(k);
         _state.HeldBack = new();
         Save();
+        Refresh();
         Changed?.Invoke();
         return 0;
     });
@@ -184,12 +204,20 @@ public sealed class BackupStore
     {
         _state.HeldBack = new();
         Save();
+        Refresh();
         Changed?.Invoke();
         return 0;
     });
 
-    public StatusDto GetStatus() => WithLock(() =>
-        new StatusDto(UsedBytes(), QuotaBytes, DirSize(_trashDir), _state.LastBackupUtc, _state.HeldBack.Count > 0));
+    /// <summary>Letzter bekannter Stand; blockiert nie (auch nicht während eines Uploads).</summary>
+    public StatusDto GetStatus() => _snapshot with { QuotaBytes = QuotaBytes };
+
+    /// <summary>Nur unter der Sperre aufrufen.</summary>
+    private void Refresh()
+    {
+        _snapshot = new StatusDto(UsedBytes(), QuotaBytes, DirSize(_trashDir), _state.LastBackupUtc, _state.HeldBack.Count > 0);
+        _heldSnapshot = _state.HeldBack.ToList();
+    }
 
     // ---- intern ----
 
@@ -282,8 +310,17 @@ public sealed class BackupStore
             ? Directory.EnumerateFiles(dir, pattern, SearchOption.AllDirectories).Sum(f => new FileInfo(f).Length)
             : 0;
 
+    private void MaybeSave()
+    {
+        _unsaved++;
+        if (_unsaved >= SaveEveryFiles || _utcNow() - _lastSave >= SaveEvery) Save();
+    }
+
     private void Save()
     {
+        _unsaved = 0;
+        _lastSave = _utcNow();
+        SaveCount++;
         var tmp = _statePath + ".tmp";
         File.WriteAllText(tmp, JsonSerializer.Serialize(_state, Json));
         File.Move(tmp, _statePath, overwrite: true);

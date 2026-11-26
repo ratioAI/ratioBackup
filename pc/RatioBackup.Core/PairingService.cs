@@ -16,6 +16,8 @@ public sealed class PairingService
     private string? _code;
     private DateTime _codeExpires;
     private int _failed;
+    private DateTime _lockedUntil = DateTime.MinValue;
+    public static readonly TimeSpan Lockout = TimeSpan.FromMinutes(1);
 
     public event Action? Paired;
 
@@ -43,10 +45,17 @@ public sealed class PairingService
     {
         lock (_gate)
         {
+            if (_utcNow() < _lockedUntil) return null;
             if (_code is null || _utcNow() > _codeExpires) return null;
             if (!CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(code ?? ""), Encoding.UTF8.GetBytes(_code)))
             {
-                if (++_failed >= MaxAttempts) _code = null;
+                if (++_failed >= MaxAttempts)
+                {
+                    // Sperre gilt auch für neue Codes: höchstens 5 Versuche pro Minute.
+                    _code = null;
+                    _failed = 0;
+                    _lockedUntil = _utcNow() + Lockout;
+                }
                 return null;
             }
             _code = null;

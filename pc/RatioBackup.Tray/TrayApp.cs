@@ -237,6 +237,7 @@ internal sealed class TrayApp : ApplicationContext
             _api.StopAsync().GetAwaiter().GetResult();
             _api.DisposeAsync().AsTask().GetAwaiter().GetResult();
         }
+        _store?.Flush();
         base.ExitThreadCore();
     }
 }

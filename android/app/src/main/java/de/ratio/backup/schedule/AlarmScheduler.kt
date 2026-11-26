@@ -33,6 +33,11 @@ object AlarmScheduler {
 
 class AlarmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        BackupService.start(context)
+        // Erst den nächsten Versuch planen, dann starten – so reißt die Kette nie ab.
+        AlarmScheduler.scheduleNext(context)
+        try {
+            BackupService.start(context)
+        } catch (_: Exception) {
+        }
     }
 }

@@ -58,7 +58,7 @@ class BackupApi(
                 409 -> UploadResult.WrongOffset(offsetOf(res.body?.string()))
                 422 -> UploadResult.Corrupt
                 507 -> UploadResult.QuotaFull
-                else -> throw IOException("Hochladen: HTTP ${res.code}")
+                else -> throw PcErrorException(res.code)
             }
         }
     }
@@ -81,7 +81,7 @@ class BackupApi(
                 var left = length
                 while (left > 0) {
                     val n = raf.read(buf, 0, minOf(buf.size.toLong(), left).toInt())
-                    if (n < 0) throw IOException("Datei wurde während des Hochladens kürzer")
+                    if (n < 0) throw FileChangedException("Datei wurde während des Hochladens kürzer")
                     sink.write(buf, 0, n)
                     left -= n
                 }

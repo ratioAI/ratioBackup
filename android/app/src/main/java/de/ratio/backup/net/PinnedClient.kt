@@ -31,7 +31,7 @@ object PinnedClient {
             // Der PC wird per IP im Heimnetz angesprochen; die Identität sichert der Fingerabdruck.
             .hostnameVerifier { _, _ -> true }
             .connectTimeout(5, TimeUnit.SECONDS)
-            .readTimeout(60, TimeUnit.SECONDS)
+            .readTimeout(180, TimeUnit.SECONDS)
             .writeTimeout(60, TimeUnit.SECONDS)
             .build()
     }
