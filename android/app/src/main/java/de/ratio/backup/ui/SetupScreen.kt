@@ -100,7 +100,12 @@ fun SetupScreen(prefs: Prefs, refresh: Int, onDone: () -> Unit) {
                             }
                         }) { Text(if (busy) "Suche …" else "PC suchen") }
                     } else {
-                        Text("Gefunden: ${pc!!.name}. Gib den Code ein, den der PC anzeigt:")
+                        Text("Gefunden: ${pc!!.name}")
+                        Text(
+                            "Prüfcode ${de.ratio.backup.net.verifyCode(pc!!.fingerprint)} – der PC muss denselben zeigen. Stimmt er nicht, nicht koppeln.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Text("Gib den 6-stelligen Code ein, den der PC anzeigt:")
                         OutlinedTextField(
                             value = code,
                             onValueChange = { v -> code = v.filter(Char::isDigit).take(6) },

@@ -14,6 +14,7 @@ import de.ratio.backup.net.Discovery
 import de.ratio.backup.net.Pairing
 import de.ratio.backup.net.PinnedClient
 import de.ratio.backup.scan.Scanner
+import de.ratio.backup.scan.rootsFor
 import de.ratio.backup.schedule.AlarmScheduler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -91,7 +92,7 @@ class BackupService : Service() {
         notify("Gleiche mit dem PC ab …", null)
         val storage = Environment.getExternalStorageDirectory()
         val runner = BackupRunner(
-            { Scanner(storage).scan() }, client, { File(storage, it.path) }, { Environment.isExternalStorageManager() },
+            { Scanner(storage, rootsFor(prefs.categories)).scan() }, client, { File(storage, it.path) }, { Environment.isExternalStorageManager() },
         )
         return runner.run { p ->
             onProgress(p)

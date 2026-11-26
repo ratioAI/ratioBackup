@@ -43,5 +43,17 @@ class Prefs(context: Context) {
         get() = sp.getString("updateJson", null)
         set(v) = sp.edit().putString("updateJson", v).apply()
 
+    /** Startzeit der täglichen Sicherung. */
+    var startTime: java.time.LocalTime
+        get() = runCatching { java.time.LocalTime.parse(sp.getString("startTime", "20:00")) }.getOrDefault(java.time.LocalTime.of(20, 0))
+        set(v) = sp.edit().putString("startTime", "%02d:%02d".format(v.hour, v.minute)).apply()
+
+    /** Eingeschaltete Ordnergruppen (Standard: alle). */
+    var categories: Set<de.ratio.backup.scan.Category>
+        get() = sp.getStringSet("categories", null)
+            ?.mapNotNull { n -> de.ratio.backup.scan.Category.entries.firstOrNull { it.name == n } }?.toSet()
+            ?: de.ratio.backup.scan.Category.entries.toSet()
+        set(v) = sp.edit().putStringSet("categories", v.map { it.name }.toSet()).apply()
+
     val isPaired: Boolean get() = token != null && fingerprint != null
 }

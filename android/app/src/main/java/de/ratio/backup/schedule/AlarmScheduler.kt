@@ -14,8 +14,9 @@ import java.time.ZonedDateTime
 object AlarmScheduler {
     fun next(context: Context): ZonedDateTime {
         val zone = ZoneId.systemDefault()
-        val lastDate = Prefs(context).lastSuccess?.atZone(zone)?.toLocalDate()
-        return Schedule.nextAttempt(ZonedDateTime.now(zone), lastDate)
+        val prefs = Prefs(context)
+        val lastDate = prefs.lastSuccess?.atZone(zone)?.toLocalDate()
+        return Schedule.nextAttempt(ZonedDateTime.now(zone), lastDate, prefs.startTime)
     }
 
     fun scheduleNext(context: Context) {
