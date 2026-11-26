@@ -179,3 +179,40 @@ public class DiscoveryTests
         Assert.NotSame(receive, await Task.WhenAny(receive, Task.Delay(1000)));
     }
 }
+
+public sealed class HttpsTests : IDisposable
+{
+    private readonly string _root = Path.Combine(Path.GetTempPath(), "rbh-" + Guid.NewGuid().ToString("N"));
+    public void Dispose() { try { Directory.Delete(_root, true); } catch { } }
+
+    [Fact]
+    public async Task Https_ServesWithPinnedCertificate()
+    {
+        var cert = CertificateManager.LoadOrCreate(_root);
+        var fp = CertificateManager.Fingerprint(cert);
+        var store = new BackupStore(Path.Combine(_root, "data"), "X", () => DateTime.UtcNow);
+        var pairing = new PairingService(new Settings(), fp, () => DateTime.UtcNow);
+        var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+        listener.Stop();
+
+        await using var app = ApiServer.Build(store, pairing, cert, port);
+        await app.StartAsync();
+
+        string? seen = null;
+        using var handler = new HttpClientHandler
+        {
+            ServerCertificateCustomValidationCallback = (_, c, _, _) =>
+            {
+                seen = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(c!.RawData)).ToLowerInvariant();
+                return seen == fp;
+            }
+        };
+        using var http = new HttpClient(handler);
+        var res = await http.GetAsync($"https://127.0.0.1:{port}/status");
+        Assert.Equal(System.Net.HttpStatusCode.Unauthorized, res.StatusCode);
+        Assert.Equal(fp, seen);
+        await app.StopAsync();
+    }
+}

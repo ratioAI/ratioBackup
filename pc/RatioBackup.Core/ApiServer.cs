@@ -14,7 +14,7 @@ public static class ApiServer
     public static WebApplication Build(BackupStore store, PairingService pairing, X509Certificate2? cert,
         int port = DefaultPort, Action<WebApplicationBuilder>? configure = null)
     {
-        var builder = WebApplication.CreateSlimBuilder();
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions { Args = Array.Empty<string>() });
         builder.Logging.ClearProviders();
         builder.WebHost.ConfigureKestrel(o =>
         {
