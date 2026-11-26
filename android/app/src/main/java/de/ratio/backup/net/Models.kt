@@ -36,7 +36,7 @@ sealed interface UploadResult {
 interface BackupApiPort {
     suspend fun status(): Status
     suspend fun manifest(roots: List<String>, files: List<FileEntry>): ManifestResult
-    suspend fun upload(file: java.io.File, entry: FileEntry, offset: Long): UploadResult
+    suspend fun upload(file: java.io.File, entry: FileEntry, offset: Long, onBytes: (Long) -> Unit = {}): UploadResult
     suspend fun complete()
 }
 

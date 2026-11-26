@@ -3,7 +3,10 @@ package de.ratio.backup.ui
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.dynamicDarkColorScheme
+import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -25,7 +28,8 @@ class MainActivity : ComponentActivity() {
         if (prefs.isPaired) AlarmScheduler.scheduleNext(this)
 
         setContent {
-            MaterialTheme {
+            val dark = isSystemInDarkTheme()
+            MaterialTheme(colorScheme = if (dark) dynamicDarkColorScheme(this) else dynamicLightColorScheme(this)) {
                 Surface(Modifier.fillMaxSize()) {
                     var refresh by remember { mutableIntStateOf(0) }
                     var showSetup by remember { mutableStateOf(!prefs.isPaired || !Permissions.hasAllFiles()) }

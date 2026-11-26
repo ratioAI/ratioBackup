@@ -31,5 +31,17 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("autostartConfirmed", false)
         set(v) = sp.edit().putBoolean("autostartConfirmed", v).apply()
 
+    var historyJson: String?
+        get() = sp.getString("history", null)
+        set(v) = sp.edit().putString("history", v).apply()
+
+    var lastUpdateCheck: Long
+        get() = sp.getLong("lastUpdateCheck", 0)
+        set(v) = sp.edit().putLong("lastUpdateCheck", v).apply()
+
+    var updateJson: String?
+        get() = sp.getString("updateJson", null)
+        set(v) = sp.edit().putString("updateJson", v).apply()
+
     val isPaired: Boolean get() = token != null && fingerprint != null
 }

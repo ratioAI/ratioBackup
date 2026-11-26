@@ -41,7 +41,7 @@ class BackupApi(
         }
     }
 
-    override suspend fun upload(file: File, entry: FileEntry, offset: Long): UploadResult = withContext(Dispatchers.IO) {
+    override suspend fun upload(file: File, entry: FileEntry, offset: Long, onBytes: (Long) -> Unit): UploadResult = withContext(Dispatchers.IO) {
         val u = url("files")
             .addQueryParameter("path", entry.path)
             .addQueryParameter("size", entry.size.toString())
@@ -49,9 +49,11 @@ class BackupApi(
             .addQueryParameter("offset", offset.toString())
         val req = request(u)
             .header("X-Sha256", sha256(file))
-            .put(FileTailBody(file, offset, entry.size - offset))
+            .put(FileTailBody(file, offset, entry.size - offset, onBytes))
             .build()
-        client.newCall(req).execute().use { res ->
+        val call = client.newCall(req)
+        current = call
+        call.execute().use { res ->
             when (res.code) {
                 200 -> UploadResult.Done
                 206 -> UploadResult.Partial(offsetOf(res.body?.string()))
@@ -69,9 +71,19 @@ class BackupApi(
         }
     }
 
+    @Volatile private var current: okhttp3.Call? = null
+
+    /** Bricht den laufenden Upload sofort ab (für „Abbrechen"). */
+    fun cancelCurrent() { current?.cancel() }
+
     private fun offsetOf(body: String?): Long = json.decodeFromString(OffsetDto.serializer(), body ?: "{}").offset
 
-    private class FileTailBody(private val file: File, private val offset: Long, private val length: Long) : RequestBody() {
+    private class FileTailBody(
+        private val file: File,
+        private val offset: Long,
+        private val length: Long,
+        private val onBytes: (Long) -> Unit,
+    ) : RequestBody() {
         override fun contentType(): MediaType = "application/octet-stream".toMediaType()
         override fun contentLength(): Long = length
         override fun writeTo(sink: BufferedSink) {
@@ -84,6 +96,7 @@ class BackupApi(
                     if (n < 0) throw FileChangedException("Datei wurde während des Hochladens kürzer")
                     sink.write(buf, 0, n)
                     left -= n
+                    onBytes(n.toLong())
                 }
             }
         }

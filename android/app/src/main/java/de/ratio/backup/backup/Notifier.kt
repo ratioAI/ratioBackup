@@ -28,15 +28,21 @@ object Notifier {
         context, 0, Intent(context, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE,
     )
 
-    fun progress(context: Context, text: String, done: Int = 0, total: Int = 0): Notification =
-        Notification.Builder(context, CHANNEL_PROGRESS)
+    fun running(context: Context, text: String, p: Progress?): Notification {
+        val cancel = PendingIntent.getService(
+            context, 1, Intent(context, BackupService::class.java).setAction(BackupService.ACTION_CANCEL), PendingIntent.FLAG_IMMUTABLE,
+        )
+        return Notification.Builder(context, CHANNEL_PROGRESS)
             .setSmallIcon(android.R.drawable.stat_sys_upload)
-            .setContentTitle("RatioBackup")
+            .setContentTitle("RatioBackup sichert")
             .setContentText(text)
             .setOngoing(true)
+            .setOnlyAlertOnce(true)
             .setContentIntent(openApp(context))
-            .apply { if (total > 0) setProgress(total, done, false) }
+            .addAction(Notification.Action.Builder(null, "Abbrechen", cancel).build())
+            .apply { if (p != null) setProgress(100, p.percent, false) else setProgress(0, 0, true) }
             .build()
+    }
 
     fun warn(context: Context, title: String, text: String) {
         if (context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return

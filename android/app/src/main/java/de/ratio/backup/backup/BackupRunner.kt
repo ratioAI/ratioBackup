@@ -7,12 +7,15 @@ import de.ratio.backup.net.UploadResult
 import de.ratio.backup.scan.FileEntry
 import de.ratio.backup.scan.ScanResult
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import java.io.File
 import java.io.FileNotFoundException
 
 sealed interface RunOutcome {
     data class Success(val uploaded: Int, val skipped: Int) : RunOutcome
     data object NotPaired : RunOutcome
+    data object Cancelled : RunOutcome
     data object NoStorageAccess : RunOutcome
     data object PcNotFound : RunOutcome
     data object QuotaFull : RunOutcome
@@ -25,8 +28,11 @@ class BackupRunner(
     private val api: BackupApiPort,
     private val open: (FileEntry) -> File,
     private val hasStorageAccess: () -> Boolean = { true },
+    private val nowMs: () -> Long = System::currentTimeMillis,
 ) {
-    suspend fun run(onProgress: (done: Int, total: Int) -> Unit): RunOutcome {
+    private var lastEmit = 0L
+
+    suspend fun run(onProgress: (Progress) -> Unit): RunOutcome {
         // Ohne Dateizugriff sähe der PC leere Ordner und würde Sicherungen in den Papierkorb legen.
         if (!hasStorageAccess()) return RunOutcome.NoStorageAccess
         try {
@@ -34,33 +40,51 @@ class BackupRunner(
             val byPath = result.files.associateBy { it.path }
             val manifest = api.manifest(result.roots, result.files)
             val todo = manifest.needed.mapNotNull { n -> byPath[n.path]?.let { it to n.offset } }
+            val t = ProgressTracker(todo.size, todo.sumOf { (e, o) -> (e.size - o).coerceAtLeast(0) }, nowMs)
             var uploaded = 0
             var skipped = 0
-            onProgress(0, todo.size)
-            for ((i, item) in todo.withIndex()) {
-                when (uploadOne(item.first, item.second)) {
+            onProgress(t.snapshot())
+            for ((entry, offset) in todo) {
+                t.fileStarted(entry.path)
+                onProgress(t.snapshot())
+                val before = t.snapshot().doneBytes
+                when (uploadOne(entry, offset) { n -> t.addBytes(n); emit(t, onProgress) }) {
                     Step.Done -> uploaded++
-                    Step.Skipped -> skipped++
+                    Step.Skipped -> {
+                        skipped++
+                        t.dropBytes((entry.size - offset) - (t.snapshot().doneBytes - before))
+                    }
                     Step.QuotaFull -> return RunOutcome.QuotaFull
                 }
-                onProgress(i + 1, todo.size)
+                t.fileDone()
+                onProgress(t.snapshot())
             }
             api.complete()
             return RunOutcome.Success(uploaded, skipped)
         } catch (e: CancellationException) {
-            throw e
+            return RunOutcome.Cancelled
         } catch (e: Exception) {
+            // Ein abgebrochener Upload wirft eine IOException – trotzdem als „Abgebrochen" melden.
+            if (!currentCoroutineContext().isActive) return RunOutcome.Cancelled
             return RunOutcome.Failed(e.message ?: e.javaClass.simpleName)
+        }
+    }
+
+    private fun emit(t: ProgressTracker, onProgress: (Progress) -> Unit) {
+        val now = nowMs()
+        if (now - lastEmit >= EMIT_MS) {
+            lastEmit = now
+            onProgress(t.snapshot())
         }
     }
 
     private enum class Step { Done, Skipped, QuotaFull }
 
-    private suspend fun uploadOne(entry: FileEntry, startOffset: Long): Step {
+    private suspend fun uploadOne(entry: FileEntry, startOffset: Long, onBytes: (Long) -> Unit): Step {
         var offset = startOffset
         repeat(MAX_ATTEMPTS) {
             val r = try {
-                api.upload(open(entry), entry, offset)
+                api.upload(open(entry), entry, offset, onBytes)
             } catch (e: PcErrorException) {
                 // Token ungültig: alle weiteren Dateien würden auch scheitern – Lauf abbrechen.
                 if (e.code == 401 || e.code == 403) throw e
@@ -84,5 +108,6 @@ class BackupRunner(
 
     companion object {
         private const val MAX_ATTEMPTS = 2
+        private const val EMIT_MS = 500L
     }
 }
