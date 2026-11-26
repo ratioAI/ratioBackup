@@ -1,6 +1,7 @@
 package de.ratio.backup
 
 import de.ratio.backup.backup.BackupRunner
+import de.ratio.backup.backup.Progress
 import de.ratio.backup.backup.RunOutcome
 import de.ratio.backup.net.BackupApiPort
 import de.ratio.backup.net.FileChangedException
@@ -11,6 +12,7 @@ import de.ratio.backup.net.Status
 import de.ratio.backup.net.UploadResult
 import de.ratio.backup.scan.FileEntry
 import de.ratio.backup.scan.ScanResult
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -42,11 +44,13 @@ class BackupRunnerTest {
             manifestCalled = true
             return ManifestResult(needed, 0, 0)
         }
-        override suspend fun upload(file: File, entry: FileEntry, offset: Long): UploadResult {
+        override suspend fun upload(file: File, entry: FileEntry, offset: Long, onBytes: (Long) -> Unit): UploadResult {
             if (failUpload) throw IOException("WLAN weg")
             throwFor[entry.path]?.let { throw it }
             uploads += entry.path to offset
-            return if (answers.isEmpty()) UploadResult.Done else answers.removeAt(0)
+            val r = if (answers.isEmpty()) UploadResult.Done else answers.removeAt(0)
+            if (r == UploadResult.Done) onBytes(entry.size - offset)
+            return r
         }
         override suspend fun complete() { completed = true }
     }
@@ -56,26 +60,27 @@ class BackupRunnerTest {
     @Test
     fun uploadsOnlyNeeded_thenComplete() = runBlocking {
         val api = FakeApi(listOf(NeededFile("DCIM/b.jpg", 0)))
-        val progress = mutableListOf<Pair<Int, Int>>()
-        val r = runner(api).run { d, t -> progress += d to t }
+        val progress = mutableListOf<Progress>()
+        val r = runner(api).run { progress += it }
         assertEquals(RunOutcome.Success(uploaded = 1, skipped = 0), r)
         assertEquals(listOf("DCIM/b.jpg" to 0L), api.uploads)
         assertTrue(api.completed)
         assertEquals(listOf("DCIM"), api.manifestRoots)
-        assertEquals(1 to 1, progress.last())
+        assertEquals(1, progress.last().doneFiles)
+        assertEquals(1, progress.last().totalFiles)
     }
 
     @Test
     fun resumesFromOffsetGivenByManifest() = runBlocking {
         val api = FakeApi(listOf(NeededFile("DCIM/b.jpg", 12)))
-        runner(api).run { _, _ -> }
+        runner(api).run { }
         assertEquals(listOf("DCIM/b.jpg" to 12L), api.uploads)
     }
 
     @Test
     fun wrongOffset_retriesOnceFromServerOffset() = runBlocking {
         val api = FakeApi(listOf(NeededFile("DCIM/b.jpg", 0)), mutableListOf(UploadResult.WrongOffset(7), UploadResult.Done))
-        val r = runner(api).run { _, _ -> }
+        val r = runner(api).run { }
         assertEquals(listOf("DCIM/b.jpg" to 0L, "DCIM/b.jpg" to 7L), api.uploads)
         assertEquals(RunOutcome.Success(1, 0), r)
     }
@@ -84,13 +89,13 @@ class BackupRunnerTest {
     fun repeatedWrongOffset_skipsFile() = runBlocking {
         val api = FakeApi(listOf(NeededFile("DCIM/b.jpg", 0)),
             mutableListOf(UploadResult.WrongOffset(7), UploadResult.WrongOffset(9), UploadResult.WrongOffset(9)))
-        assertEquals(RunOutcome.Success(0, 1), runner(api).run { _, _ -> })
+        assertEquals(RunOutcome.Success(0, 1), runner(api).run { })
     }
 
     @Test
     fun corrupt_skipsFile_runStillCompletes() = runBlocking {
         val api = FakeApi(listOf(NeededFile("DCIM/a.jpg", 0), NeededFile("DCIM/b.jpg", 0)), mutableListOf(UploadResult.Corrupt))
-        val r = runner(api).run { _, _ -> }
+        val r = runner(api).run { }
         assertEquals(RunOutcome.Success(uploaded = 1, skipped = 1), r)
         assertTrue(api.completed)
     }
@@ -98,7 +103,7 @@ class BackupRunnerTest {
     @Test
     fun quotaFull_stopsWithoutComplete() = runBlocking {
         val api = FakeApi(listOf(NeededFile("DCIM/a.jpg", 0), NeededFile("DCIM/b.jpg", 0)), mutableListOf(UploadResult.QuotaFull))
-        assertEquals(RunOutcome.QuotaFull, runner(api).run { _, _ -> })
+        assertEquals(RunOutcome.QuotaFull, runner(api).run { })
         assertEquals(1, api.uploads.size)
         assertFalse(api.completed)
     }
@@ -106,14 +111,14 @@ class BackupRunnerTest {
     @Test
     fun networkError_returnsFailed_noComplete() = runBlocking {
         val api = FakeApi(listOf(NeededFile("DCIM/a.jpg", 0)), failUpload = true)
-        assertTrue(runner(api).run { _, _ -> } is RunOutcome.Failed)
+        assertTrue(runner(api).run { } is RunOutcome.Failed)
         assertFalse(api.completed)
     }
 
     @Test
     fun neededPathUnknownToPhone_ignored() = runBlocking {
         val api = FakeApi(listOf(NeededFile("DCIM/fremd.jpg", 0)))
-        assertEquals(RunOutcome.Success(0, 0), runner(api).run { _, _ -> })
+        assertEquals(RunOutcome.Success(0, 0), runner(api).run { })
         assertTrue(api.uploads.isEmpty())
     }
 
@@ -122,29 +127,49 @@ class BackupRunnerTest {
     @Test
     fun fileVanished_skipsFile_runCompletes() = runBlocking {
         val api = FakeApi(both(), throwFor = mapOf("DCIM/a.jpg" to FileNotFoundException("weg")))
-        assertEquals(RunOutcome.Success(uploaded = 1, skipped = 1), runner(api).run { _, _ -> })
+        assertEquals(RunOutcome.Success(uploaded = 1, skipped = 1), runner(api).run { })
         assertTrue(api.completed)
     }
 
     @Test
     fun fileShrank_skipsFile_runCompletes() = runBlocking {
         val api = FakeApi(both(), throwFor = mapOf("DCIM/a.jpg" to FileChangedException("kürzer")))
-        assertEquals(RunOutcome.Success(uploaded = 1, skipped = 1), runner(api).run { _, _ -> })
+        assertEquals(RunOutcome.Success(uploaded = 1, skipped = 1), runner(api).run { })
     }
 
     @Test
     fun pcErrorForOneFile_skipsFile_runCompletes() = runBlocking {
         val api = FakeApi(both(), throwFor = mapOf("DCIM/a.jpg" to PcErrorException(500)))
-        assertEquals(RunOutcome.Success(uploaded = 1, skipped = 1), runner(api).run { _, _ -> })
+        assertEquals(RunOutcome.Success(uploaded = 1, skipped = 1), runner(api).run { })
         assertTrue(api.completed)
     }
 
     @Test
     fun noStorageAccess_noManifest() = runBlocking {
         val api = FakeApi(both())
-        val r = BackupRunner({ scan }, api, { File(it.path) }, hasStorageAccess = { false }).run { _, _ -> }
+        val r = BackupRunner({ scan }, api, { File(it.path) }, hasStorageAccess = { false }).run { }
         assertEquals(RunOutcome.NoStorageAccess, r)
         assertFalse(api.manifestCalled)
+        assertFalse(api.completed)
+    }
+
+    @Test
+    fun runner_reportsBytesAndFiles() = runBlocking {
+        val api = FakeApi(both())
+        val progress = mutableListOf<Progress>()
+        runner(api).run { progress += it }
+        val last = progress.last()
+        assertEquals(2, last.doneFiles)
+        assertEquals(2, last.totalFiles)
+        assertEquals(30L, last.totalBytes)
+        assertEquals(30L, last.doneBytes)
+        assertEquals(100, last.percent)
+    }
+
+    @Test
+    fun cancelled_returnsCancelled_noComplete() = runBlocking {
+        val api = FakeApi(both(), throwFor = mapOf("DCIM/a.jpg" to CancellationException("abgebrochen")))
+        assertEquals(RunOutcome.Cancelled, runner(api).run { })
         assertFalse(api.completed)
     }
 }
