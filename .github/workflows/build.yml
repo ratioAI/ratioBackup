@@ -71,6 +71,8 @@ jobs:
           chmod +x gradlew
           ./gradlew testDebugUnitTest assembleRelease --console=plain 2>&1 | tee ../android.log
           cp app/build/outputs/apk/release/app-release.apk ../RatioBackup.apk
+          BT=$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)
+          "$ANDROID_HOME/build-tools/$BT/apksigner" verify --verbose --print-certs ../RatioBackup.apk 2>&1 | grep -E "Verified using|Signer #1 certificate DN|DOES NOT VERIFY|ERROR" | tee -a ../android.log
       - name: Zusammenfassung
         if: always()
         run: python3 tools/summarize.py android "${{ steps.build.outcome }}" android.log android/app/build/test-results > result-android.md

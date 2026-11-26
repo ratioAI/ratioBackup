@@ -18,6 +18,10 @@ internal static class Program
         }
         ApplicationConfiguration.Initialize();
         Application.Run(new TrayApp());
+        // Sicherheitsnetz: Hängt noch irgendein Hintergrund-Thread, den Prozess trotzdem beenden,
+        // damit „läuft bereits“ nach dem Schließen nie wieder vorkommt.
+        try { mutex.ReleaseMutex(); } catch (ApplicationException) { }
+        Environment.Exit(0);
     }
 
     private static bool WaitFor(Mutex m, TimeSpan timeout)

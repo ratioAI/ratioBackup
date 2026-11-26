@@ -148,7 +148,8 @@ internal sealed class TrayApp : ApplicationContext
         try
         {
             _api = ApiServer.Build(_store, _pairing, cert);
-            _api.StartAsync().GetAwaiter().GetResult();
+            // Nie auf dem UI-Thread blockierend warten: Fortsetzungen würden dort festhängen.
+            Task.Run(() => _api.StartAsync()).GetAwaiter().GetResult();
             _discovery = new DiscoveryResponder(Environment.MachineName, ApiServer.DefaultPort, fingerprint);
             _discovery.Start();
         }
@@ -294,8 +295,15 @@ internal sealed class TrayApp : ApplicationContext
         _discovery?.Dispose();
         if (_api != null)
         {
-            _api.StopAsync().GetAwaiter().GetResult();
-            _api.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            // Auf einem Hintergrund-Thread stoppen (sonst Deadlock mit dem UI-Thread, Prozess bliebe unsichtbar hängen)
+            // und höchstens 5 Sekunden warten.
+            var api = _api;
+            _api = null;
+            Task.Run(async () =>
+            {
+                try { await api.StopAsync(TimeSpan.FromSeconds(3)); } catch { }
+                try { await api.DisposeAsync(); } catch { }
+            }).Wait(TimeSpan.FromSeconds(5));
         }
         _store?.Flush();
         base.ExitThreadCore();

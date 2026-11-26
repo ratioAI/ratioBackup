@@ -43,6 +43,10 @@ out.append(f"Tests: {passed} bestanden, {failed} fehlgeschlagen")
 for name, text in failures[:40]:
     out.append(f"- FAIL {name}\n```\n{text.strip()[:1200]}\n```")
 
+if log.exists():
+    sig = [l for l in log.read_text(errors="replace").splitlines() if re.search(r"Verified using|certificate DN|DOES NOT VERIFY", l)]
+    if sig:
+        out.append("Signatur:\n```\n" + "\n".join(sig[:10]) + "\n```")
 if outcome != "success" and log.exists():
     lines = log.read_text(errors="replace").splitlines()
     errs = [l for l in lines if re.search(r"(^e: |error|FAILED|Exception|What went wrong)", l, re.I)]
