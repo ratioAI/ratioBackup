@@ -1,4 +1,4 @@
-# 35421ae390241338dbc9bb0905495a19707fffc8 (main)
+# 87ddffa5fbf2238a041f2e0bb8e0ecc8731bfb78 (main)
 ## android: success
 Tests: 62 bestanden, 0 fehlgeschlagen
 Signatur:
@@ -12,17 +12,5 @@ Verified using v4 scheme (APK Signature Scheme v4): false
 ```
 ## pc-test: success
 Tests: 82 bestanden, 0 fehlgeschlagen
-## pc-exe: failure
+## pc-exe: success
 Tests: 0 bestanden, 0 fehlgeschlagen
-Fehlerzeilen:
-```
-D:\a\ratioBackup\ratioBackup\pc\RatioBackup.Tray\TrayApp.cs(304,43): error CS1503: Argument 1: cannot convert from 'System.TimeSpan' to 'System.Threading.CancellationToken' [D:\a\ratioBackup\ratioBackup\pc\RatioBackup.Tray\RatioBackup.Tray.csproj]
-```
-Logende:
-```
-  Determining projects to restore...
-  Restored D:\a\ratioBackup\ratioBackup\pc\RatioBackup.Core\RatioBackup.Core.csproj (in 7.12 sec).
-  Restored D:\a\ratioBackup\ratioBackup\pc\RatioBackup.Tray\RatioBackup.Tray.csproj (in 7.12 sec).
-  RatioBackup.Core -> D:\a\ratioBackup\ratioBackup\pc\RatioBackup.Core\bin\Release\net8.0\RatioBackup.Core.dll
-D:\a\ratioBackup\ratioBackup\pc\RatioBackup.Tray\TrayApp.cs(304,43): error CS1503: Argument 1: cannot convert from 'System.TimeSpan' to 'System.Threading.CancellationToken' [D:\a\ratioBackup\ratioBackup\pc\RatioBackup.Tray\RatioBackup.Tray.csproj]
-```
